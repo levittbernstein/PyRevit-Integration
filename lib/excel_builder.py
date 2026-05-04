@@ -330,7 +330,9 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     ws.freeze_panes = ws.cell(row=eff_data_start, column=FIRST_DATE_COL)
 
     # ── Print area ────────────────────────────────────────────────────────
-    ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
+    # Extend at least to col AI (35) so the logo in the top-right is included.
+    _print_right = max(last_col, 35)
+    ws.print_area = 'A1:{}{}'.format(get_column_letter(_print_right), last_data_row)
 
     # ── Restore template images (logo etc.) ──────────────────────────────
     # openpyxl does not reliably preserve images from .xltx through load/save;
@@ -396,13 +398,15 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     ref_label = ws.cell(row=_DIST_FIRST_ROW, column=10)
     ref_code  = ws.cell(row=_DIST_FIRST_ROW, column=FIRST_DATE_COL)
 
-    # Unmerge and clear all distribution rows
-    _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 9, ws.max_column)
+    # Unmerge and clear all distribution rows — cols 1-8 included so template
+    # merges (A4:H6, A7:H10 etc.) don't leave stray gridlines on unused rows.
+    _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 1, ws.max_column)
     for r in range(_DIST_FIRST_ROW, header_row):
-        for c in range(9, ws.max_column + 1):
+        for c in range(1, ws.max_column + 1):
             cell = ws.cell(row=r, column=c)
-            cell.fill  = _HEADER_FILL
-            cell.value = None
+            cell.fill   = _HEADER_FILL
+            cell.border = Border()
+            cell.value  = None
 
     for i, recipient in enumerate(recipients):
         row    = _DIST_FIRST_ROW + i
