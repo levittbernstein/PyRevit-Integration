@@ -121,10 +121,11 @@ def _export_via_excel_com(excel_path, pdf_path):
             tmpl_wb = None
             out_wb.Save()
 
-        # ── Fit to single page ────────────────────────────────────────────────
-        out_ws.PageSetup.Zoom           = False
-        out_ws.PageSetup.FitToPagesWide = 1
-        out_ws.PageSetup.FitToPagesTall = False  # unlimited — fills width, flows to multiple pages
+        # ── Page setup ───────────────────────────────────────────────────────
+        out_ws.PageSetup.Zoom            = False
+        out_ws.PageSetup.FitToPagesWide  = 1
+        out_ws.PageSetup.FitToPagesTall  = False  # unlimited — fills width, flows to multiple pages
+        out_ws.PageSetup.PrintTitleRows  = ''     # remove repeating header rows on page 2+
 
         # ── Export PDF ────────────────────────────────────────────────────────
         excel.Interactive = True

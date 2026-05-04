@@ -287,6 +287,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
             w = ws.column_dimensions[letter].width or 8
             return round((w + 0.71) * 7 + 5)
 
+        _ch_px = _col_px('H')
         _ci_px = _col_px('I')
         _cj_px = _col_px('J')
         _ck_px = _col_px('K')
@@ -295,16 +296,19 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _logo_w_px = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
 
         # Right-align: start the logo so its right edge is 4px before col L
-        # Anchor at col I (col=8, 0-indexed) — offset calculated from I's left edge
-        _col_off_px = _ci_px + _cj_px + _ck_px - _logo_w_px - 4
+        # Anchor at col H (col=7, 0-indexed) — offset calculated from H's left edge
+        _col_off_px = _ch_px + _ci_px + _cj_px + _ck_px - _logo_w_px - 4
         _logo_img        = XLImage(_LOGO)
         _logo_img.height = _logo_h_px
         _logo_img.width  = _logo_w_px
-        _marker          = AnchorMarker(col=8, colOff=max(0, _col_off_px) * 9525,
+        _marker          = AnchorMarker(col=7, colOff=max(0, _col_off_px) * 9525,
                                         row=0, rowOff=101600)
         _size            = XDRPositiveSize2D(cx=_logo_w_px * 9525, cy=_logo_h_px * 9525)
         _logo_img.anchor = OneCellAnchor(_from=_marker, ext=_size)
         ws.add_image(_logo_img)
+
+    # ── Remove any repeat-rows-on-each-page print title set in the template ──
+    ws.print_title_rows = None
 
     wb.template = False
     wb.save(output_path)
