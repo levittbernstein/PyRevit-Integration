@@ -25,11 +25,13 @@ _HEADER_FILL = PatternFill(patternType='solid',
 _TEMPLATE = os.path.join(os.path.dirname(__file__), 'template.xltx')
 
 # ── Layout constants (describe the template; effective values are computed at runtime) ──
-HEADER_ROW     = 11   # row of column-label headers in the template
-DATA_ROW_START = 12   # first data row in the template
-FIRST_DATE_COL = 12   # column L
+HEADER_ROW      = 11  # row of column-label headers in the template
+DATA_ROW_START  = 12  # first data row in the template
+FIRST_DATE_COL  = 12  # column L
 _DIST_FIRST_ROW = 4   # first distribution (recipient) row
 _DIST_TMPL_ROWS = 7   # number of distribution rows pre-formatted in the template
+_HEADER_PADDING = 4   # blank rows inserted between the header row and the first data row
+                      # so that column-label cells can be merged tall enough for rotated text
 
 _HEADER_LABELS = [
     'Drawing Package', 'Project', 'Originator',
@@ -124,21 +126,20 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     last_col = FIRST_DATE_COL + n_dates - 1
 
     # ── Compute effective row layout ──────────────────────────────────────
-    # Distribution block occupies rows 4 .. (eff_header_row - 1).
-    # The template has 7 pre-formatted distribution rows (rows 4-10).
-    # If more recipients exist, insert extra rows to expand the block.
+    # Distribution block: rows 4 .. (eff_header_row - 1)
+    # Header row:         eff_header_row
+    # Padding rows:       eff_header_row+1 .. eff_data_start-1  (merged with header)
+    # Data rows:          eff_data_start ..
     n_recipients    = len(settings.get('recipients', []))
     extra_dist_rows = max(0, n_recipients - _DIST_TMPL_ROWS)
     eff_header_row  = HEADER_ROW + extra_dist_rows
-    eff_data_start  = DATA_ROW_START + extra_dist_rows
+    eff_data_start  = eff_header_row + 1 + _HEADER_PADDING
 
     # Snapshot styles from TEMPLATE rows BEFORE any modification/insertion.
     _date_data_snap = _snapshot_style(ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL))
     _date_hdr_snap  = _snapshot_style(ws.cell(row=HEADER_ROW,     column=FIRST_DATE_COL))
     _date_r3_snap   = _snapshot_style(ws.cell(row=3,              column=FIRST_DATE_COL))
     _date_col_width = ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57
-    # Also snapshot the last template distribution row for style propagation
-    _dist_row_snap  = _snapshot_style(ws.cell(row=HEADER_ROW - 1, column=FIRST_DATE_COL))
 
     # How many date columns are already in the template?
     template_date_cols = ws.max_column - (FIRST_DATE_COL - 1)
@@ -153,6 +154,16 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
             for c in range(1, FIRST_DATE_COL + template_date_cols):
                 _copy_cell_style(ws.cell(row=last_tmpl_dist, column=c),
                                  ws.cell(row=new_r, column=c))
+
+    # ── Insert padding rows between header and first data row ─────────────
+    # Each column-label cell is later merged from eff_header_row down through
+    # all padding rows, giving the combined height needed for rotated text.
+    ws.insert_rows(eff_header_row + 1, _HEADER_PADDING)
+    for pad_r in range(eff_header_row + 1, eff_data_start):
+        ws.row_dimensions[pad_r].height = _DATA_ROW_HEIGHT
+        for c in range(1, FIRST_DATE_COL + template_date_cols):
+            _copy_cell_style(ws.cell(row=eff_header_row, column=c),
+                             ws.cell(row=pad_r, column=c))
 
     # ── Expand date columns if we need more than the template provides ────
     if n_dates > template_date_cols:
@@ -195,6 +206,13 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
 
     # ── Column-label header row ───────────────────────────────────────────
     _write_date_headers(ws, issue_keys, _date_hdr_snap, eff_header_row)
+
+    # ── Merge each column header cell with its padding rows ───────────────
+    # This makes every column-label cell tall enough for rotated text.
+    _unmerge_region(ws, eff_header_row, eff_data_start - 1, 1, last_col)
+    for _mc in range(1, last_col + 1):
+        ws.merge_cells(start_row=eff_header_row, start_column=_mc,
+                       end_row=eff_data_start - 1, end_column=_mc)
 
     # ── Drawing data rows ─────────────────────────────────────────────────
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
