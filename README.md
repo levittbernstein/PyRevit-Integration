@@ -21,6 +21,7 @@ Exports a formatted **Deliverables List & Issue Sheet** (Excel + PDF) from any o
 | pyRevit 4.8+ | Must use **CPython engine** |
 | Microsoft Excel | For PDF export via COM |
 | `openpyxl` | `pip install openpyxl` |
+| `Pillow` | `pip install Pillow` — required for logo image in the Excel output |
 | `pywin32` | `pip install pywin32` |
 | Founders Grotesk font | Falls back to Arial if not installed |
 
@@ -51,7 +52,7 @@ To verify: open the pyRevit console and run `import sys; print(sys.version)`.
 
 ### 3. Install Python packages
 ```
-"<pyrevit-cpython-path>\python.exe" -m pip install openpyxl pywin32
+"<pyrevit-cpython-path>\python.exe" -m pip install openpyxl Pillow pywin32
 ```
 The script will show you the exact path if packages are missing.
 
