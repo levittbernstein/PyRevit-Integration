@@ -52,19 +52,13 @@ def _export_via_libreoffice(soffice_exe, excel_path, pdf_path):
 
 # ── Excel COM ─────────────────────────────────────────────────────────────────
 
-def _copy_rich_text(src, dst):
-    """Copy value + character-level formatting from COM Range src to dst."""
-    dst.Value = src.Value
-    n = src.Characters.Count
-    for i in range(1, n + 1):
-        sf = src.Characters(i, 1).Font
-        df = dst.Characters(i, 1).Font
-        df.Bold      = sf.Bold
-        df.Italic    = sf.Italic
-        df.Underline = sf.Underline
-        df.Color     = sf.Color
-        df.Size      = sf.Size
-        df.Name      = sf.Name
+def _copy_rich_text(excel, src, dst):
+    """Copy value + rich-text formatting from COM Range src to dst via clipboard."""
+    # xlPasteAll = -4104 pastes value, formula, format, and character-level
+    # rich text in one call — avoids the pywin32 Characters(i,1).Font dispatch bug.
+    src.Copy()
+    dst.PasteSpecial(Paste=-4104)
+    excel.CutCopyMode = False
 
 
 def _export_via_excel_com(excel_path, pdf_path):
@@ -84,6 +78,7 @@ def _export_via_excel_com(excel_path, pdf_path):
         excel = win32.Dispatch('Excel.Application')
         excel.Visible          = False
         excel.DisplayAlerts    = False
+        excel.Interactive      = False
         excel.AskToUpdateLinks = False
 
         out_wb = excel.Workbooks.Open(
@@ -107,12 +102,13 @@ def _export_via_excel_com(excel_path, pdf_path):
             # A4:H6  — KEY Revisions cell (merged, value in A4)
             # A7:H10 — disclaimer cell     (merged, value in A7)
             for row in (4, 7):
-                _copy_rich_text(tmpl_ws.Cells(row, 1), out_ws.Cells(row, 1))
+                _copy_rich_text(excel, tmpl_ws.Cells(row, 1), out_ws.Cells(row, 1))
             tmpl_wb.Close(SaveChanges=False)
             tmpl_wb = None
             out_wb.Save()
 
         # ── Export PDF ────────────────────────────────────────────────────────
+        excel.Interactive = True
         out_ws.ExportAsFixedFormat(
             Type=0,
             Filename=os.path.abspath(pdf_path),

@@ -207,11 +207,36 @@ def get_sheets_data(doc):
 
             if tb is not None:
                 family_name = tb.Symbol.Family.Name
+                # 1. Try name match: "LB-A1-Titleblock", "A3 Drawing", etc.
                 m = re.search(r'A[0-4](?!\d)', family_name, re.IGNORECASE)
                 if m:
                     size = m.group(0).upper()
                 else:
-                    print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
+                    # 2. Try Width/Height parameters on the titleblock symbol
+                    try:
+                        sym = tb.Symbol
+                        for w_name in ('Width', 'Sheet Width', 'W'):
+                            w_p = sym.LookupParameter(w_name)
+                            if w_p and w_p.HasValue:
+                                break
+                        for h_name in ('Height', 'Sheet Height', 'H'):
+                            h_p = sym.LookupParameter(h_name)
+                            if h_p and h_p.HasValue:
+                                break
+                        if w_p and h_p and w_p.HasValue and h_p.HasValue:
+                            try:
+                                from Autodesk.Revit.DB import UnitTypeId  # noqa: PLC0415
+                                w_mm = UnitUtils.ConvertFromInternalUnits(w_p.AsDouble(), UnitTypeId.Millimeters)
+                                h_mm = UnitUtils.ConvertFromInternalUnits(h_p.AsDouble(), UnitTypeId.Millimeters)
+                            except (ImportError, AttributeError):
+                                from Autodesk.Revit.DB import DisplayUnitType  # noqa: PLC0415
+                                w_mm = UnitUtils.ConvertFromInternalUnits(w_p.AsDouble(), DisplayUnitType.DUT_MILLIMETERS)
+                                h_mm = UnitUtils.ConvertFromInternalUnits(h_p.AsDouble(), DisplayUnitType.DUT_MILLIMETERS)
+                            size = _paper_size(w_mm, h_mm)
+                    except Exception:
+                        pass
+                    if not size:
+                        print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
             else:
                 print('LB Issue Register — no titleblock on sheet {}'.format(sheet_number))
         except Exception as _tb_err:
