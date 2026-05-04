@@ -120,6 +120,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _copy_cell_style(_r3_ref, _c)
         _c.value = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
+        _c.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
@@ -134,6 +135,15 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _remerge_row(ws, 1, last_col)
     _remerge_row(ws, 2, last_col)
     # Row 3 date cells are intentionally left unmerged (per-column values)
+
+    # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
+    for _cn, _cl in ((9, 'I'), (11, 'K')):
+        _w = max(
+            (len(str(ws.cell(row=_r, column=_cn).value or ''))
+             for _r in range(DATA_ROW_START, last_data_row + 1)),
+            default=8
+        )
+        ws.column_dimensions[_cl].width = min(_w + 3, 55)
 
     # ── Freeze panes ──────────────────────────────────────────────────────
     ws.freeze_panes = ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL)
@@ -247,7 +257,8 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col):
     issue_idx = {key: i for i, key in enumerate(issue_keys)}
 
     # Get style reference from template row 12 (first data row)
-    ref_cols = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, last_col + 1)}
+    ref_cols  = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, last_col + 1)}
+    date_ref  = ref_cols.get(FIRST_DATE_COL)   # canonical style for ALL date cells
 
     # Unmerge and clear all data rows
     _unmerge_region(ws, DATA_ROW_START, ws.max_row, 1, ws.max_column)
@@ -269,10 +280,10 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col):
         ws.row_dimensions[current_row].height = _DATA_ROW_HEIGHT
         r = current_row
 
-        # Restore styles from template row 12 reference
+        # Restore styles — date columns all use the same reference cell
         for c in range(1, last_col + 1):
-            _copy_cell_style(ref_cols.get(c, ref_cols.get(min(c, 11))),
-                             ws.cell(row=r, column=c))
+            src = date_ref if c >= FIRST_DATE_COL else ref_cols.get(c, ref_cols.get(min(c, 11)))
+            _copy_cell_style(src, ws.cell(row=r, column=c))
 
         values = [
             (1,  sheet['sheet_type'],           'center'),
