@@ -66,12 +66,22 @@ def _copy_cell_style(src, dst):
         dst.alignment = src.alignment.copy()
 
 
-def _get_style_cell(ws, row, col):
-    """Return a cell to use as style reference, reading past merges if needed."""
-    cell = ws.cell(row=row, column=col)
-    if cell.data_type == 'n' and cell.value is None:
-        return cell
-    return cell
+def _unmerge_region(ws, min_row, max_row, min_col, max_col):
+    """Remove all merges overlapping a region and flush stale MergedCell cache entries.
+
+    openpyxl leaves MergedCell (read-only) objects in ws._cells after removing
+    a merge range. Deleting them forces fresh writable Cell objects on next access.
+    """
+    to_remove = [
+        m for m in list(ws.merged_cells.ranges)
+        if m.min_row <= max_row and m.max_row >= min_row
+        and m.min_col <= max_col and m.max_col >= min_col
+    ]
+    for m in to_remove:
+        ws.merged_cells.remove(m)
+        for r in range(m.min_row, m.max_row + 1):
+            for c in range(m.min_col, m.max_col + 1):
+                ws._cells.pop((r, c), None)
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -143,12 +153,7 @@ def _latest_code(sheets_data, date_str, issued_by):
 
 def _remerge_row(ws, row, last_col, start_col=1):
     """Remove any existing merge on the row and re-merge from start_col to last_col."""
-    to_remove = [
-        m for m in ws.merged_cells.ranges
-        if m.min_row == row and m.max_row == row and m.min_col == start_col
-    ]
-    for m in to_remove:
-        ws.merged_cells.remove(m)
+    _unmerge_region(ws, row, row, start_col, last_col)
     if last_col > start_col:
         ws.merge_cells(start_row=row, start_column=start_col,
                        end_row=row, end_column=last_col)
@@ -179,22 +184,12 @@ def _write_distribution_block(ws, issue_keys, settings):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
 
-    # Remove any merge that overlaps rows 4-10 and cols 9+ before touching values
-    to_remove = [
-        m for m in list(ws.merged_cells.ranges)
-        if m.min_row <= 10 and m.max_row >= 4 and m.max_col >= 9
-    ]
-    for m in to_remove:
-        ws.merged_cells.remove(m)
+    # Unmerge everything in rows 4-10 cols I+ and flush stale MergedCell cache
+    _unmerge_region(ws, 4, 10, 9, ws.max_column)
 
-    # Clear existing content in I:K for rows 4-10
+    # Clear content in rows 4-10 cols I+
     for r in range(4, 11):
-        for c in range(9, 12):
-            ws.cell(row=r, column=c).value = None
-
-    # Clear existing distribution code cells in rows 4-10 (cols L+)
-    for r in range(4, 11):
-        for c in range(FIRST_DATE_COL, ws.max_column + 1):
+        for c in range(9, ws.max_column + 1):
             ws.cell(row=r, column=c).value = None
 
     # Get reference style for recipient label and code cells from template row 4
@@ -247,7 +242,8 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col):
     # Get style reference from template row 12 (first data row)
     ref_cols = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, last_col + 1)}
 
-    # Clear all existing data rows content
+    # Unmerge and clear all data rows
+    _unmerge_region(ws, DATA_ROW_START, ws.max_row, 1, ws.max_column)
     for row in ws.iter_rows(min_row=DATA_ROW_START, max_row=ws.max_row):
         for cell in row:
             cell.value = None
