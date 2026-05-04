@@ -156,13 +156,14 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     if _r3_lbl_snap:
         _apply_snapshot(_lbl, _r3_lbl_snap)
     _lbl.value     = 'Issue date & revision'
-    _lbl.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+    _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=True)
 
+    # Row 3 date cells: show "date | Pxx" horizontally (non-rotated) on the same row as label.
     for _ci, (_ds, _) in enumerate(issue_keys):
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _apply_snapshot(_c, _date_r3_snap)
         _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
-        _c.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
+        _c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
@@ -287,13 +288,12 @@ def _write_distribution_block(ws, issue_keys, settings):
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None):
-    """Write date into row 11 date columns, rotated 90°."""
-    for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
+    """Style row 11 date columns; dates are shown in row 3 so row 11 carries no text."""
+    for col_idx in range(len(issue_keys)):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
         _apply_snapshot(cell, date_snap)
-        cell.value     = _fmt_header(date_str)
-        cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
+        cell.value = None
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col, date_snap=None):
