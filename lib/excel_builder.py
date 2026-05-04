@@ -112,9 +112,14 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
-    # ── Row 3: label → "Issue date & revision" ───────────────────────────
+    # ── Row 3: label, then per-column "[date] | P01" ─────────────────────
     ws.cell(row=3, column=11).value = 'Issue date & revision'
-    ws.cell(row=3, column=FIRST_DATE_COL).value = datetime.now().strftime('%d.%m.%Y')
+    _r3_ref = ws.cell(row=3, column=FIRST_DATE_COL)   # capture style before unmerge
+    _unmerge_region(ws, 3, 3, FIRST_DATE_COL, last_col)
+    for _ci, (_ds, _) in enumerate(issue_keys):
+        _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
+        _copy_cell_style(_r3_ref, _c)
+        _c.value = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
@@ -128,7 +133,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Fix merge for row 1 and 2 to cover all columns ────────────────────
     _remerge_row(ws, 1, last_col)
     _remerge_row(ws, 2, last_col)
-    _remerge_row(ws, 3, last_col, start_col=FIRST_DATE_COL)
+    # Row 3 date cells are intentionally left unmerged (per-column values)
 
     # ── Freeze panes ──────────────────────────────────────────────────────
     ws.freeze_panes = ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL)
@@ -230,12 +235,12 @@ def _write_distribution_block(ws, issue_keys, settings):
 
 
 def _write_date_headers(ws, issue_keys):
-    """Write date + revision code (P01, P02…) into row 11 date columns."""
+    """Write date into row 11 date columns, rotated 90°."""
     for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
-        cell.value = '{}\nP{:02d}'.format(_fmt_header(date_str), col_idx + 1)
-        cell.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
+        cell.value = _fmt_header(date_str)
+        cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='center')
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col):
