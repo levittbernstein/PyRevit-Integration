@@ -132,6 +132,7 @@ def _restore_template_images(ws, template_path):
     _XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
     _A   = 'http://schemas.openxmlformats.org/drawingml/2006/main'
     _R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    ws._images.clear()  # remove auto-loaded copies to avoid duplicate anchors
     try:
         with zipfile.ZipFile(template_path, 'r') as zf:
             names = set(zf.namelist())
@@ -305,11 +306,16 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # that lives in the right-hand portion of row 1 is not wiped.
     # Row 2 ("DELIVERABLES LIST & ISSUE SHEET") spans the full sheet width.
     _row1_snap = _snapshot_style(ws.cell(row=1, column=1))
+    _row1_max_col = ws.max_column  # capture template width before unmerge wipes cells
     _remerge_row(ws, 1, FIRST_DATE_COL - 1)
     _remerge_row(ws, 2, last_col)
     _r1 = ws.cell(row=1, column=1)
     _apply_snapshot(_r1, _row1_snap)
     _r1.value = settings.get('register_title') or project_info.get('project_name', '')
+    # Re-apply fill to row 1 date-column area so the logo has a dark background.
+    if _row1_snap:
+        for _c in range(FIRST_DATE_COL, max(_row1_max_col, 30) + 1):
+            ws.cell(row=1, column=_c).fill = _row1_snap['fill']
 
     # ── Auto-size Drawing Package (col 1), Document Title (col 9), Scale (col 11) ──
     for _cn, _cl in ((1, 'A'), (9, 'I'), (11, 'K')):
