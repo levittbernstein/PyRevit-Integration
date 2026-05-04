@@ -179,10 +179,10 @@ def _write_distribution_block(ws, issue_keys, settings):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
 
-    # Remove all merges in rows 4-10 cols I+ before touching any values
+    # Remove any merge that overlaps rows 4-10 and cols 9+ before touching values
     to_remove = [
         m for m in list(ws.merged_cells.ranges)
-        if 4 <= m.min_row <= 10 and m.max_row <= 10 and m.min_col >= 9
+        if m.min_row <= 10 and m.max_row >= 4 and m.max_col >= 9
     ]
     for m in to_remove:
         ws.merged_cells.remove(m)
