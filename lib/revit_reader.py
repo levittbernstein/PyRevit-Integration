@@ -281,7 +281,7 @@ def get_sheets_data(doc):
                 except Exception:
                     pass
                 if not size:
-                    print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
+                    pass  # size stays blank for non-standard titleblock families
 
         if not size:
             try:
