@@ -147,16 +147,16 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
-    # ── Row 3: label merged over I:K (cols 9-11), rotated date cells L+ ──
-    # Snapshot label cell style before unmerging, then re-merge I3:K3.
+    # ── Row 3: label merged A:K (cols 1-11), rotated date cells L+ ──
+    # Extend the merge across ALL fixed columns so the label has room to breathe.
     _r3_lbl_snap = _snapshot_style(ws.cell(row=3, column=9))
-    _unmerge_region(ws, 3, 3, 9, last_col)
-    ws.merge_cells(start_row=3, start_column=9, end_row=3, end_column=11)
-    _lbl = ws.cell(row=3, column=9)
+    _unmerge_region(ws, 3, 3, 1, last_col)
+    ws.merge_cells(start_row=3, start_column=1, end_row=3, end_column=11)
+    _lbl = ws.cell(row=3, column=1)
     if _r3_lbl_snap:
         _apply_snapshot(_lbl, _r3_lbl_snap)
     _lbl.value     = 'Issue date & revision'
-    _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=True)
+    _lbl.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
     # Row 3 date cells: only the first column shows the placeholder; the rest are blank.
     for _ci, (_ds, _) in enumerate(issue_keys):
@@ -320,6 +320,15 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col, date_snap=None):
 
         if prev_group is not None and group != prev_group:
             ws.row_dimensions[current_row].height = _DATA_ROW_HEIGHT
+            for _c in range(1, last_col + 1):
+                _tgt = ws.cell(row=current_row, column=_c)
+                if _c >= FIRST_DATE_COL:
+                    _apply_snapshot(_tgt, date_snap)
+                else:
+                    _src = ref_cols.get(_c, ref_cols.get(min(_c, FIRST_DATE_COL - 1)))
+                    if _src is not None:
+                        _copy_cell_style(_src, _tgt)
+                _tgt.value = None
             current_row += 1
 
         prev_group = group
