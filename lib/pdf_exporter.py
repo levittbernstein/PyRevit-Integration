@@ -52,13 +52,27 @@ def _export_via_libreoffice(soffice_exe, excel_path, pdf_path):
 
 # ── Excel COM ─────────────────────────────────────────────────────────────────
 
-def _copy_rich_text(excel, src, dst):
-    """Copy value + rich-text formatting from COM Range src to dst via clipboard."""
-    # xlPasteAll = -4104 pastes value, formula, format, and character-level
-    # rich text in one call — avoids the pywin32 Characters(i,1).Font dispatch bug.
-    src.Copy()
-    dst.PasteSpecial(Paste=-4104)
+def _copy_rich_text(excel, tmpl_ws, out_ws, src_addr, dst_addr):
+    """Copy a merged cell's rich text from template to output.
+
+    PasteSpecial fails if the destination is already merged.  We unmerge it
+    first; xlPasteAll (-4104) then pastes value + character formatting + the
+    merge itself, restoring the original structure.
+    """
+    out_ws.Range(dst_addr).UnMerge()          # remove existing merge so paste works
+    tmpl_ws.Range(src_addr).Copy()            # source to clipboard (entire merged block)
+    out_ws.Cells(*_addr_to_rc(dst_addr)).PasteSpecial(Paste=-4104)  # xlPasteAll
     excel.CutCopyMode = False
+
+
+def _addr_to_rc(addr):
+    """Return (row, col) of the top-left cell of a range address like 'A4:H6'."""
+    top_left = addr.split(':')[0]             # 'A4'
+    col_str  = ''.join(c for c in top_left if c.isalpha()).upper()
+    row      = int(''.join(c for c in top_left if c.isdigit()))
+    col      = sum((ord(ch) - 64) * (26 ** i)
+                   for i, ch in enumerate(reversed(col_str)))
+    return row, col
 
 
 def _export_via_excel_com(excel_path, pdf_path):
@@ -99,10 +113,10 @@ def _export_via_excel_com(excel_path, pdf_path):
                 ReadOnly=True,
             )
             tmpl_ws = tmpl_wb.Worksheets(1)
-            # A4:H6  — KEY Revisions cell (merged, value in A4)
-            # A7:H10 — disclaimer cell     (merged, value in A7)
-            for row in (4, 7):
-                _copy_rich_text(excel, tmpl_ws.Cells(row, 1), out_ws.Cells(row, 1))
+            # A4:H6  — KEY Revisions cell (merged, rich text)
+            # A7:H10 — disclaimer cell     (merged, rich text)
+            _copy_rich_text(excel, tmpl_ws, out_ws, 'A4:H6',  'A4:H6')
+            _copy_rich_text(excel, tmpl_ws, out_ws, 'A7:H10', 'A7:H10')
             tmpl_wb.Close(SaveChanges=False)
             tmpl_wb = None
             out_wb.Save()
