@@ -288,12 +288,13 @@ def _write_distribution_block(ws, issue_keys, settings):
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None):
-    """Style row 11 date columns; dates are shown in row 3 so row 11 carries no text."""
-    for col_idx in range(len(issue_keys)):
+    """Write date into row 11 date columns, rotated 90°."""
+    for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
         _apply_snapshot(cell, date_snap)
-        cell.value = None
+        cell.value     = _fmt_header(date_str)
+        cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col, date_snap=None):
