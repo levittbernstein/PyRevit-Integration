@@ -181,20 +181,35 @@ def get_sheets_data(doc):
         discipline           = _get_param(sheet, 'Discipline')
         sheet_type           = _get_param(sheet, 'Sheet Type')
 
-        # Sheet size
+        # Sheet size — primary: parse titleblock family name; fallback: sheet dimensions
+        size = ''
         try:
-            # Revit 2021+ unit API
-            try:
-                from Autodesk.Revit.DB import UnitTypeId  # noqa: PLC0415
-                w_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetWidth,  UnitTypeId.Millimeters)
-                h_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetHeight, UnitTypeId.Millimeters)
-            except (ImportError, AttributeError):
-                from Autodesk.Revit.DB import DisplayUnitType  # noqa: PLC0415
-                w_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetWidth,  DisplayUnitType.DUT_MILLIMETERS)
-                h_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetHeight, DisplayUnitType.DUT_MILLIMETERS)
-            size = _paper_size(w_mm, h_mm)
+            from Autodesk.Revit.DB import FamilyInstance, BuiltInCategory  # noqa: PLC0415
+            tb_col = (FilteredElementCollector(doc, sheet.Id)
+                      .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                      .OfClass(FamilyInstance))
+            tb = tb_col.FirstElement()
+            if tb:
+                family_name = tb.Symbol.Family.Name
+                m = re.search(r'\bA[0-4]\b', family_name, re.IGNORECASE)
+                if m:
+                    size = m.group(0).upper()
         except Exception:
-            size = ''
+            pass
+
+        if not size:
+            try:
+                try:
+                    from Autodesk.Revit.DB import UnitTypeId  # noqa: PLC0415
+                    w_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetWidth,  UnitTypeId.Millimeters)
+                    h_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetHeight, UnitTypeId.Millimeters)
+                except (ImportError, AttributeError):
+                    from Autodesk.Revit.DB import DisplayUnitType  # noqa: PLC0415
+                    w_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetWidth,  DisplayUnitType.DUT_MILLIMETERS)
+                    h_mm = UnitUtils.ConvertFromInternalUnits(sheet.SheetHeight, DisplayUnitType.DUT_MILLIMETERS)
+                size = _paper_size(w_mm, h_mm)
+            except Exception:
+                pass
 
         # Scale
         scale_param = sheet.LookupParameter('Scale')

@@ -35,11 +35,12 @@ def _load_xaml(path):
 class ExportDialog(object):
 
     def __init__(self, issue_keys, settings):
-        self._issue_keys = issue_keys
-        self._settings   = settings
-        self._confirmed  = False
-        self._name_boxes = []
-        self._code_boxes = {}
+        self._issue_keys       = issue_keys
+        self._settings         = settings
+        self._confirmed        = False
+        self._name_boxes       = []
+        self._code_boxes       = {}
+        self._selected_row_idx = None
 
         xaml_path = os.path.join(os.path.dirname(__file__), 'dialog.xaml')
         self._win = _load_xaml(xaml_path)
@@ -69,10 +70,10 @@ class ExportDialog(object):
         _buttons = {}
         _walk(self._win)
 
-        if '+ Add recipient'  in _buttons: _buttons['+ Add recipient'].Click  += self._on_add
-        if '− Remove last'    in _buttons: _buttons['− Remove last'].Click    += self._on_remove
-        if 'Export Register'  in _buttons: _buttons['Export Register'].Click  += self._on_export
-        if 'Cancel'           in _buttons: _buttons['Cancel'].Click           += self._on_cancel
+        if '+ Add recipient'    in _buttons: _buttons['+ Add recipient'].Click    += self._on_add
+        if '− Remove selected'  in _buttons: _buttons['− Remove selected'].Click  += self._on_remove
+        if 'Export Register'    in _buttons: _buttons['Export Register'].Click    += self._on_export
+        if 'Cancel'             in _buttons: _buttons['Cancel'].Click             += self._on_cancel
 
     # ------------------------------------------------------------------
     # Distribution grid
@@ -155,6 +156,7 @@ class ExportDialog(object):
             name_box.Background              = bg
             name_box.FontSize                = 11
             name_box.VerticalContentAlignment = VerticalAlignment.Center
+            name_box.GotFocus += self._make_focus_handler(row_idx)
             Grid.SetRow(name_box, row_idx + 1)
             Grid.SetColumn(name_box, 0)
             container.Children.Add(name_box)
@@ -176,10 +178,27 @@ class ExportDialog(object):
                 cell.TextAlignment            = TextAlignment.Center
                 cell.VerticalContentAlignment = VerticalAlignment.Center
                 cell.MaxLength                = 3
+                cell.GotFocus                += self._make_focus_handler(row_idx)
                 Grid.SetRow(cell, row_idx + 1)
                 Grid.SetColumn(cell, col_idx + 1)
                 container.Children.Add(cell)
                 self._code_boxes[(row_idx, col_idx)] = cell
+
+    def _make_focus_handler(self, row_idx):
+        def handler(sender, e):
+            self._select_row(row_idx)
+        return handler
+
+    def _select_row(self, row_idx):
+        self._selected_row_idx = row_idx
+        for i, nb in enumerate(self._name_boxes):
+            is_sel = (i == row_idx)
+            nb.Background = Brushes.LightBlue if is_sel else (
+                Brushes.White if i % 2 == 0 else Brushes.WhiteSmoke)
+        for (ri, ci), cell in self._code_boxes.items():
+            is_sel = (ri == row_idx)
+            cell.Background = Brushes.LightBlue if is_sel else (
+                Brushes.White if ri % 2 == 0 else Brushes.WhiteSmoke)
 
     def _header_cell(self, container, text, row, col):
         tb = TextBlock()
@@ -215,9 +234,14 @@ class ExportDialog(object):
         self._build_grid()
 
     def _on_remove(self, sender, e):
-        if self._recipients:
-            self._recipients.pop()
-            self._build_grid()
+        if not self._recipients:
+            return
+        idx = self._selected_row_idx
+        if idx is None or idx >= len(self._recipients):
+            idx = len(self._recipients) - 1
+        self._recipients.pop(idx)
+        self._selected_row_idx = None
+        self._build_grid()
 
     def _on_export(self, sender, e):
         self._confirmed = True
