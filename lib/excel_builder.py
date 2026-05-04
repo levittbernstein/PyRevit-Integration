@@ -158,12 +158,15 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _lbl.value     = 'Issue date & revision'
     _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=True)
 
-    # Row 3 date cells: show "date | Pxx" horizontally (non-rotated) on the same row as label.
+    # Row 3 date cells: only the first column shows the placeholder; the rest are blank.
     for _ci, (_ds, _) in enumerate(issue_keys):
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _apply_snapshot(_c, _date_r3_snap)
-        _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
-        _c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        if _ci == 0:
+            _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
+            _c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        else:
+            _c.value = None
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
