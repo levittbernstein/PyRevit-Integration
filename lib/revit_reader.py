@@ -5,6 +5,19 @@ import re
 from collections import OrderedDict
 
 
+def _normalise_date(val):
+    """Return a DD/MM/YYYY string from whatever RevisionDate gives us.
+
+    Revit 2024+ returns datetime.date; older versions return a plain string.
+    """
+    if not val:
+        return ''
+    try:
+        return val.strftime('%d/%m/%Y')   # datetime.date / datetime.datetime
+    except AttributeError:
+        return str(val)
+
+
 def _get_param(element, name, built_in=None):
     """Return a parameter value by name or BuiltInParameter, or ''."""
     try:
@@ -135,9 +148,8 @@ def get_all_revision_dates(doc):
     ordered = sorted(revisions, key=_seq)
     result = OrderedDict()
     for rev in ordered:
-        date = rev.RevisionDate or ''
         result[rev.Id] = {
-            'date': date,
+            'date': _normalise_date(rev.RevisionDate),
             'description': rev.Description or '',
             'issued_by': rev.IssuedBy or '',
             'issued_to': rev.IssuedTo or '',
@@ -282,7 +294,7 @@ def get_sheets_data(doc):
                 continue
             per_sheet_idx += 1
             code = _revision_code(doc, sheet, rev_elem, per_sheet_idx)
-            date_str = rev_elem.RevisionDate or ''
+            date_str = _normalise_date(rev_elem.RevisionDate)
             try:
                 _rid = rev_id.IntegerValue
             except AttributeError:
@@ -339,14 +351,14 @@ def collect_issue_dates(sheets_data):
 
     # Sort by parsing the date string DD/MM/YY or DD/MM/YYYY
     def _date_sort(key):
-        date_str = key[0]
+        date_str = str(key[0])  # guard: _normalise_date should give str already
         for fmt in ('%d/%m/%y', '%d/%m/%Y', '%d.%m.%y', '%d.%m.%Y'):
             try:
                 from datetime import datetime  # noqa: PLC0415
                 return datetime.strptime(date_str, fmt)
-            except (ValueError, ImportError):
+            except (ValueError, ImportError, TypeError):
                 pass
-        return date_str  # fallback: sort as string
+        return date_str  # fallback: sort as string (consistent type)
 
     sorted_keys = sorted(seen.keys(), key=_date_sort)
     return sorted_keys  # list of (date_str, issued_by) tuples

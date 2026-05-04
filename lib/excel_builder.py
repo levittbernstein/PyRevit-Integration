@@ -240,7 +240,7 @@ def _write_date_headers(ws, issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
         cell.value = _fmt_header(date_str)
-        cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='center')
+        cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col):
