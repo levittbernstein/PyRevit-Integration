@@ -154,6 +154,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
             for c in range(1, FIRST_DATE_COL + template_date_cols):
                 _copy_cell_style(ws.cell(row=last_tmpl_dist, column=c),
                                  ws.cell(row=new_r, column=c))
+                # Template cols A-H may be merged cells (no style); force grey fill.
+                ws.cell(row=new_r, column=c).fill = _HEADER_FILL
 
     # ── Insert padding rows between header and first data row ─────────────
     # Each column-label cell is later merged from eff_header_row down through
@@ -243,8 +245,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _apply_snapshot(_r1, _row1_snap)
     _r1.value = settings.get('register_title') or project_info.get('project_name', '')
 
-    # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
-    for _cn, _cl in ((9, 'I'), (11, 'K')):
+    # ── Auto-size Drawing Package (col 1), Document Title (col 9), Scale (col 11) ──
+    for _cn, _cl in ((1, 'A'), (9, 'I'), (11, 'K')):
         _w = max(
             (len(str(ws.cell(row=_r, column=_cn).value or ''))
              for _r in range(eff_data_start, last_data_row + 1)),
