@@ -276,7 +276,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Fit everything onto a single page when printing / exporting PDF ───
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     ws.page_setup.fitToWidth  = 1
-    ws.page_setup.fitToHeight = 1
+    ws.page_setup.fitToHeight = 0  # unlimited pages tall — scale to fill width only
 
     # ── Logo: right-aligned to end just before col L ──────────────────────
     # Col I and col K are auto-sized above, so read their widths here.
@@ -295,12 +295,12 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _logo_w_px = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
 
         # Right-align: start the logo so its right edge is 4px before col L
-        _col_off_px = _ci_px + _cj_px + _ck_px - _logo_w_px - 4
+        # Anchor at col J (col=9, 0-indexed) — offset calculated from J's left edge
+        _col_off_px = _cj_px + _ck_px - _logo_w_px - 4
         _logo_img        = XLImage(_LOGO)
         _logo_img.height = _logo_h_px
         _logo_img.width  = _logo_w_px
-        # Anchor at col I (col=8, 0-indexed); rowOff ≈ 8pt down from top of row 1
-        _marker          = AnchorMarker(col=8, colOff=max(0, _col_off_px) * 9525,
+        _marker          = AnchorMarker(col=9, colOff=max(0, _col_off_px) * 9525,
                                         row=0, rowOff=101600)
         _size            = XDRPositiveSize2D(cx=_logo_w_px * 9525, cy=_logo_h_px * 9525)
         _logo_img.anchor = OneCellAnchor(_from=_marker, ext=_size)
