@@ -132,7 +132,7 @@ try:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    stdout_b, stderr_b = result.communicate(timeout=180)
+    stdout_b, stderr_b = result.communicate()
     stdout = stdout_b.decode('utf-8', errors='replace').strip()
     stderr = stderr_b.decode('utf-8', errors='replace').strip()
 finally:
