@@ -15,7 +15,12 @@ from datetime import datetime
 
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
+
+# Header dark fill (theme 0 / dark1 = black, tint -0.15 → near-black matching LB template)
+_HEADER_FILL = PatternFill(patternType='solid',
+                           fgColor=Color(theme=0, tint=-0.14999847407452621))
 
 _TEMPLATE = os.path.join(os.path.dirname(__file__), 'template.xltx')
 
@@ -87,7 +92,7 @@ def _unmerge_region(ws, min_row, max_row, min_col, max_col):
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def build_register(sheets_data, issue_keys, settings, output_path, project_info):
-    wb = load_workbook(_TEMPLATE)
+    wb = load_workbook(_TEMPLATE, rich_text=True)
     ws = wb.active
 
     n_dates  = len(issue_keys)
@@ -99,6 +104,10 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Expand date columns if we need more than the template provides ─────
     if n_dates > template_date_cols:
         _expand_date_columns(ws, template_date_cols, n_dates)
+
+    # ── Widen col H so the KEY Revisions text is fully visible ────────────
+    if ws.column_dimensions['H'].width < 12:
+        ws.column_dimensions['H'].width = 12
 
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
@@ -181,19 +190,21 @@ def _write_distribution_block(ws, issue_keys, settings):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
 
-    # Capture style references BEFORE unmerge flushes the cell cache.
-    # After _unmerge_region these cell objects are no longer in ws._cells but the
-    # Python objects still hold their style data, so _copy_cell_style still works.
-    ref_label = ws.cell(row=4, column=10)          # J4 'Client' — grey label style
-    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)  # L4 — date-column style
+    # Capture font/border/alignment refs BEFORE unmerge flushes the cell cache.
+    ref_label = ws.cell(row=4, column=10)          # J4 'Client'
+    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)  # L4 date column
 
     # Unmerge everything in rows 4-10 cols I+ and flush stale MergedCell cache
     _unmerge_region(ws, 4, 10, 9, ws.max_column)
 
-    # Clear content in rows 4-10 cols I+
+    # Paint ALL cells in rows 4-10 cols I+ with the header dark fill first,
+    # then overwrite content. Using _HEADER_FILL directly (not a theme-copy)
+    # because openpyxl can't reliably round-trip theme-colored fills via copy().
     for r in range(4, 11):
         for c in range(9, ws.max_column + 1):
-            ws.cell(row=r, column=c).value = None
+            cell = ws.cell(row=r, column=c)
+            cell.fill  = _HEADER_FILL
+            cell.value = None
 
     for i, recipient in enumerate(recipients[:_MAX_RECIPIENTS]):
         row    = 4 + i
@@ -203,15 +214,8 @@ def _write_distribution_block(ws, issue_keys, settings):
         label_cell = ws.cell(row=row, column=9)
         label_cell.value = r_name
         _copy_cell_style(ref_label, label_cell)
-        label_cell.alignment = label_cell.alignment.copy()
-        try:
-            label_cell.alignment = Alignment(
-                horizontal='right', vertical=label_cell.alignment.vertical,
-                wrap_text=label_cell.alignment.wrap_text,
-                text_rotation=label_cell.alignment.text_rotation
-            )
-        except Exception:
-            pass
+        label_cell.fill = _HEADER_FILL   # override fill explicitly
+        label_cell.alignment = Alignment(horizontal='right', vertical='center')
         ws.merge_cells(start_row=row, start_column=9, end_row=row, end_column=11)
 
         # Write distribution codes
@@ -221,6 +225,7 @@ def _write_distribution_block(ws, issue_keys, settings):
             dc   = FIRST_DATE_COL + col_idx
             code_cell = ws.cell(row=row, column=dc)
             _copy_cell_style(ref_code, code_cell)
+            code_cell.fill  = _HEADER_FILL   # override fill explicitly
             code_cell.value = code
 
 
