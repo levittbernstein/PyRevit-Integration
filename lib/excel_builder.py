@@ -186,6 +186,9 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _lbl = ws.cell(row=3, column=9)
     if _r3_lbl_snap:
         _apply_snapshot(_lbl, _r3_lbl_snap)
+        _f = _r3_lbl_snap['font']
+        _lbl.font = Font(name=_f.name, size=_f.size, bold=True, italic=_f.italic,
+                         color=_f.color, underline=_f.underline, strike=_f.strikethrough)
     _lbl.value     = 'Issue date & revision'
     _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=False)
 
@@ -226,10 +229,13 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
                                      _date_data_snap, eff_data_start)
 
     # ── Fix merge for rows 1 and 2 to cover all columns ──────────────────
+    # Snapshot row 1 style before remerge destroys the anchor cell (losing font colour etc.)
+    _row1_snap = _snapshot_style(ws.cell(row=1, column=1))
     _remerge_row(ws, 1, last_col)
     _remerge_row(ws, 2, last_col)
-    # Write project name AFTER remerge — _remerge_row pops (1,1) from ws._cells.
-    ws.cell(row=1, column=1).value = project_info.get('project_name', '')
+    _r1 = ws.cell(row=1, column=1)
+    _apply_snapshot(_r1, _row1_snap)
+    _r1.value = project_info.get('project_name', '')
 
     # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
     for _cn, _cl in ((9, 'I'), (11, 'K')):
