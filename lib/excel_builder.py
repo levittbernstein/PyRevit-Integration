@@ -123,16 +123,18 @@ def _unmerge_region(ws, min_row, max_row, min_col, max_col):
 # ── Template image restoration ────────────────────────────────────────────────
 
 def _restore_template_images(ws, template_path):
-    """Re-add images from the template that openpyxl loses during load/save of .xltx.
+    """Ensure template images (logo etc.) are present in ws._images.
 
-    Reads the drawing XML and relationship file directly from the ZIP archive so
-    the images are added at their original anchor positions regardless of what
-    openpyxl did (or didn't) preserve internally.
+    openpyxl usually loads images from .xltx automatically, which is the
+    preferred path — it needs no Pillow.  This function is the fallback for
+    environments where the auto-load didn't happen: it reads the drawing XML
+    and embeds each image from the ZIP using XLImage (requires Pillow).
+    Call only when ws._images is empty.
     """
+    import tempfile as _tempfile
     _XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
     _A   = 'http://schemas.openxmlformats.org/drawingml/2006/main'
     _R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-    ws._images.clear()  # remove auto-loaded copies to avoid duplicate anchors
     try:
         with zipfile.ZipFile(template_path, 'r') as zf:
             names = set(zf.namelist())
@@ -141,7 +143,6 @@ def _restore_template_images(ws, template_path):
             if drawing_xml not in names:
                 return
 
-            # Map rId → xl/media/<filename>
             rid_to_img = {}
             if drawing_rels in names:
                 for rel in ET.fromstring(zf.read(drawing_rels)):
@@ -170,13 +171,28 @@ def _restore_template_images(ws, template_path):
                     if not img_path or img_path not in names:
                         continue
 
-                    img = XLImage(BytesIO(zf.read(img_path)))
-                    # Anchor uses 0-indexed col/row; openpyxl cell refs are 1-indexed
-                    img.anchor = '{}{}'.format(
-                        get_column_letter(int(col_el.text) + 1),
-                        int(row_el.text) + 1,
-                    )
-                    ws.add_image(img)
+                    # Write to a temp file so XLImage can read dimensions without
+                    # relying on BytesIO seek behaviour across openpyxl versions.
+                    suffix = '.' + img_path.rsplit('.', 1)[-1]
+                    fd, tmp = _tempfile.mkstemp(suffix=suffix)
+                    try:
+                        os.write(fd, zf.read(img_path))
+                        os.close(fd)
+                        img = XLImage(tmp)
+                        img.anchor = '{}{}'.format(
+                            get_column_letter(int(col_el.text) + 1),
+                            int(row_el.text) + 1,
+                        )
+                        ws.add_image(img)
+                    except Exception:
+                        try:
+                            os.close(fd)
+                        except Exception:
+                            pass
+                        try:
+                            os.unlink(tmp)
+                        except Exception:
+                            pass
     except Exception:
         pass
 
@@ -335,9 +351,11 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     ws.print_area = 'A1:{}{}'.format(get_column_letter(_print_right), last_data_row)
 
     # ── Restore template images (logo etc.) ──────────────────────────────
-    # openpyxl does not reliably preserve images from .xltx through load/save;
-    # re-extract and re-add them from the template ZIP as the final step.
-    _restore_template_images(ws, _TEMPLATE)
+    # openpyxl usually auto-loads images when the workbook is opened; if it
+    # did, use them as-is (no Pillow required).  Only fall back to ZIP
+    # extraction when the auto-load produced nothing.
+    if len(ws._images) == 0:
+        _restore_template_images(ws, _TEMPLATE)
 
     wb.template = False
     wb.save(output_path)
@@ -398,15 +416,19 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     ref_label = ws.cell(row=_DIST_FIRST_ROW, column=10)
     ref_code  = ws.cell(row=_DIST_FIRST_ROW, column=FIRST_DATE_COL)
 
-    # Unmerge and clear all distribution rows — cols 1-8 included so template
-    # merges (A4:H6, A7:H10 etc.) don't leave stray gridlines on unused rows.
+    # Unmerge and clear all distribution rows.
+    # Cols 1-8: also remove template block merges (A4:H6, A7:H10 etc.) that
+    #           would leave stray gridlines on unused rows.
+    # Cols 9+ : unmerge per-row label merges; preserve template cell borders
+    #           so the distribution grid lines remain visible.
     _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 1, ws.max_column)
     for r in range(_DIST_FIRST_ROW, header_row):
         for c in range(1, ws.max_column + 1):
             cell = ws.cell(row=r, column=c)
-            cell.fill   = _HEADER_FILL
-            cell.border = Border()
-            cell.value  = None
+            cell.fill  = _HEADER_FILL
+            cell.value = None
+            if c < 9:  # left filler area — no border
+                cell.border = Border()
 
     for i, recipient in enumerate(recipients):
         row    = _DIST_FIRST_ROW + i
