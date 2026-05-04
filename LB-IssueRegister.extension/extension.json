@@ -1,8 +1,0 @@
-{
-    "type": "lib",
-    "name": "LB-IssueRegister",
-    "description": "Levitt Bernstein Issue Register exporter for Revit",
-    "author": "Levitt Bernstein",
-    "url": "https://github.com/levittbernstein/Revit-issue-sheet",
-    "version": "1.0.0"
-}
