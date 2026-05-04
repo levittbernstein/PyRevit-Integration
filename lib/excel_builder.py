@@ -452,6 +452,14 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
             code_cell.fill  = _HEADER_FILL
             code_cell.value = code
 
+    # Remove bottom and side borders from the last distribution row's date cells
+    # (L<dist_last>:AI<dist_last>) so the table has a clean lower edge.
+    _last_dc = max(FIRST_DATE_COL + len(issue_keys) - 1, 35)
+    for c in range(FIRST_DATE_COL, _last_dc + 1):
+        cell = ws.cell(row=dist_last, column=c)
+        top_side = cell.border.top if cell.has_style else None
+        cell.border = Border(top=top_side)
+
 
 def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
     """Write date into the header row date columns, rotated 90°."""
