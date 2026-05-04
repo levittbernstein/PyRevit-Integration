@@ -276,14 +276,11 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # at K1 scaled to fit the header row (preserving the 753:56 aspect ratio).
     ws._images.clear()
     if os.path.exists(_LOGO):
-        try:
-            _logo_img         = XLImage(_LOGO)
-            _logo_img.height  = 24          # pts-friendly size for a ~25pt row
-            _logo_img.width   = round(753 / 56 * 24)  # maintain aspect ratio
-            _logo_img.anchor  = 'K1'
-            ws.add_image(_logo_img)
-        except Exception:
-            pass
+        _logo_img         = XLImage(_LOGO)
+        _logo_img.height  = 24          # pts-friendly size for a ~25pt row
+        _logo_img.width   = round(753 / 56 * 24)  # maintain aspect ratio
+        _logo_img.anchor  = 'K1'
+        ws.add_image(_logo_img)
 
     wb.template = False
     wb.save(output_path)
