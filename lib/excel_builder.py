@@ -18,6 +18,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
 from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker
 
 # Header dark fill (theme 0 / dark1 = black, tint -0.15 → near-black matching LB template)
 _HEADER_FILL = PatternFill(patternType='solid',
@@ -276,10 +277,11 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # at K1 scaled to fit the header row (preserving the 753:56 aspect ratio).
     ws._images.clear()
     if os.path.exists(_LOGO):
-        _logo_img         = XLImage(_LOGO)
-        _logo_img.height  = 24          # pts-friendly size for a ~25pt row
-        _logo_img.width   = round(753 / 56 * 24)  # maintain aspect ratio
-        _logo_img.anchor  = 'K1'
+        _logo_img        = XLImage(_LOGO)
+        _logo_img.height = 24          # pts-friendly size for a ~25pt row
+        _logo_img.width  = round(753 / 56 * 24)  # maintain aspect ratio
+        # col=9 → column J (0-indexed); rowOff=76200 EMU ≈ 6pt down from top of row 1
+        _logo_img.anchor = AnchorMarker(col=9, colOff=0, row=0, rowOff=76200)
         ws.add_image(_logo_img)
 
     wb.template = False
