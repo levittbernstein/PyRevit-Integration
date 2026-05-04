@@ -192,12 +192,18 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _lbl.value     = 'Issue date & revision'
     _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=False)
 
-    # Row 3 date cells: first column shows date+Pxx (left, no wrap); rest blank.
+    # Row 3 date cells: first column shows register issue date+revision from settings.
+    _reg_date = settings.get('register_issue_date', '').strip()
+    _reg_rev  = settings.get('register_revision', '').strip()
     for _ci, (_ds, _) in enumerate(issue_keys):
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _apply_snapshot(_c, _date_r3_snap)
         if _ci == 0:
-            _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
+            if _reg_date or _reg_rev:
+                _val = ' | '.join(x for x in [_reg_date, _reg_rev] if x)
+            else:
+                _val = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
+            _c.value     = _val
             _c.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
         else:
             _c.value = None
@@ -235,7 +241,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _remerge_row(ws, 2, last_col)
     _r1 = ws.cell(row=1, column=1)
     _apply_snapshot(_r1, _row1_snap)
-    _r1.value = project_info.get('project_name', '')
+    _r1.value = settings.get('register_title') or project_info.get('project_name', '')
 
     # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
     for _cn, _cl in ((9, 'I'), (11, 'K')):

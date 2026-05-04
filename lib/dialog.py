@@ -34,20 +34,90 @@ def _load_xaml(path):
 
 class ExportDialog(object):
 
-    def __init__(self, issue_keys, settings):
+    def __init__(self, issue_keys, settings, all_packages=None, project_info=None):
         self._issue_keys       = issue_keys
         self._settings         = settings
+        self._all_packages     = all_packages or []
+        self._project_info     = project_info or {}
         self._confirmed        = False
         self._name_boxes       = []
         self._code_boxes       = {}
         self._selected_row_idx = None
 
+        # Package list controls (set in _setup_packages)
+        self._included_lb = None
+        self._excluded_lb = None
+
+        # Project info controls (set in _setup_project_info)
+        self._reg_title_box = None
+        self._reg_date_box  = None
+        self._reg_rev_box   = None
+
         xaml_path = os.path.join(os.path.dirname(__file__), 'dialog.xaml')
         self._win = _load_xaml(xaml_path)
 
         self._recipients = [dict(r) for r in settings.get('recipients', [])]
+        self._setup_project_info()
+        self._setup_packages()
         self._build_grid()
         self._wire_buttons()
+
+    # ------------------------------------------------------------------
+    # Project information fields
+    # ------------------------------------------------------------------
+
+    def _setup_project_info(self):
+        self._reg_title_box = self._win.FindName('RegisterTitle')
+        self._reg_date_box  = self._win.FindName('RegisterIssueDate')
+        self._reg_rev_box   = self._win.FindName('RegisterRevision')
+
+        if self._reg_title_box is not None:
+            self._reg_title_box.Text = self._settings.get(
+                'register_title',
+                self._project_info.get('project_name', '')
+            )
+        if self._reg_date_box is not None:
+            self._reg_date_box.Text = self._settings.get('register_issue_date', '')
+        if self._reg_rev_box is not None:
+            self._reg_rev_box.Text = self._settings.get('register_revision', '')
+
+    # ------------------------------------------------------------------
+    # Drawing packages lists
+    # ------------------------------------------------------------------
+
+    def _setup_packages(self):
+        self._included_lb = self._win.FindName('IncludedPackages')
+        self._excluded_lb = self._win.FindName('ExcludedPackages')
+        if self._included_lb is None or self._excluded_lb is None:
+            return
+
+        excluded_set = set(self._settings.get('excluded_packages', []))
+        for pkg in sorted(self._all_packages):
+            if pkg in excluded_set:
+                self._excluded_lb.Items.Add(pkg)
+            else:
+                self._included_lb.Items.Add(pkg)
+
+        self._included_lb.MouseDoubleClick += self._on_move_to_excluded
+        self._excluded_lb.MouseDoubleClick += self._on_move_to_included
+
+    def _move_items(self, src_lb, dst_lb):
+        selected = list(src_lb.SelectedItems)
+        if not selected:
+            return
+        for item in selected:
+            src_lb.Items.Remove(item)
+        existing = [dst_lb.Items[i] for i in range(dst_lb.Items.Count)]
+        merged = sorted(existing + selected)
+        dst_lb.Items.Clear()
+        for item in merged:
+            dst_lb.Items.Add(item)
+
+    def _on_move_to_excluded(self, sender, e):
+        self._move_items(self._included_lb, self._excluded_lb)
+
+    def _on_move_to_included(self, sender, e):
+        self._move_items(self._excluded_lb, self._included_lb)
 
     # ------------------------------------------------------------------
     # Button wiring
@@ -70,6 +140,11 @@ class ExportDialog(object):
         if '− Remove selected'  in _buttons: _buttons['− Remove selected'].Click  += self._on_remove
         if 'Export Register'    in _buttons: _buttons['Export Register'].Click    += self._on_export
         if 'Cancel'             in _buttons: _buttons['Cancel'].Click             += self._on_cancel
+
+        btn = self._win.FindName('MoveToExcluded')
+        if btn: btn.Click += self._on_move_to_excluded
+        btn = self._win.FindName('MoveToIncluded')
+        if btn: btn.Click += self._on_move_to_included
 
     # ------------------------------------------------------------------
     # Distribution grid
@@ -257,12 +332,29 @@ class ExportDialog(object):
 
         updated = dict(self._settings)
 
+        # Project information
+        if self._reg_title_box is not None:
+            updated['register_title'] = self._reg_title_box.Text.strip()
+        if self._reg_date_box is not None:
+            updated['register_issue_date'] = self._reg_date_box.Text.strip()
+        if self._reg_rev_box is not None:
+            updated['register_revision'] = self._reg_rev_box.Text.strip()
+
+        # Excluded packages
+        if self._excluded_lb is not None:
+            updated['excluded_packages'] = [
+                self._excluded_lb.Items[i]
+                for i in range(self._excluded_lb.Items.Count)
+            ]
+
+        # Recipients
         updated_recipients = [
             {'name': nb.Text.strip(), 'row': self._recipients[i].get('row', i + 4)}
             for i, nb in enumerate(self._name_boxes)
         ]
         updated['recipients'] = updated_recipients
 
+        # Distribution codes
         saved_issues = dict(updated.get('issues', {}))
         for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
             key = '{}||{}'.format(date_str, issued_by)

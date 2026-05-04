@@ -93,10 +93,21 @@ issue_keys = collect_issue_dates(sheets_data)
 settings = load_settings(doc)
 
 # ── Settings dialog ───────────────────────────────────────────────────────────
-dlg = ExportDialog(issue_keys, settings)
+all_packages = sorted(set(s['sheet_type'] for s in sheets_data))
+dlg = ExportDialog(issue_keys, settings, all_packages=all_packages, project_info=project_info)
 confirmed, updated_settings = dlg.show()
 
 if not confirmed:
+    sys.exit(0)
+
+# ── Filter excluded drawing packages ─────────────────────────────────────────
+excluded = set(updated_settings.get('excluded_packages', []))
+if excluded:
+    sheets_data = [s for s in sheets_data if s['sheet_type'] not in excluded]
+
+if not sheets_data:
+    forms.alert('All drawing packages are excluded. Nothing to export.',
+                title='No packages', warn_icon=True)
     sys.exit(0)
 
 # ── Save settings back to model ───────────────────────────────────────────────
