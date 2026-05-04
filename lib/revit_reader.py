@@ -316,7 +316,7 @@ def get_sheets_data(doc):
         # --- Revisions on this sheet ---
         rev_ids = list(sheet.GetAllRevisionIds())
         sheet_revisions = []
-        per_sheet_idx = 0
+        _seq_counters = {}  # per-sequence counters for Strategy 3 fallback
         for rev_id in rev_ids:
             rev_elem = doc.GetElement(rev_id)
             if rev_elem is None:
@@ -324,8 +324,17 @@ def get_sheets_data(doc):
             date_str = _normalise_date(rev_elem.RevisionDate)
             if not date_str:
                 continue  # skip revisions with no date — they produce a spurious column
-            per_sheet_idx += 1
-            code = _revision_code(doc, sheet, rev_elem, per_sheet_idx)
+            # Identify the numbering sequence so Strategy 3 uses per-sequence counts
+            # (prevents P and C revisions sharing a counter and producing P04 instead of C01)
+            try:
+                _np = rev_elem.LookupParameter('Numbering')
+                _seq_key = _np.AsString() if (_np and _np.HasValue) else ''
+            except Exception:
+                _seq_key = ''
+            if not _seq_key:
+                _seq_key = rev_elem.Description or '_default'
+            _seq_counters[_seq_key] = _seq_counters.get(_seq_key, 0) + 1
+            code = _revision_code(doc, sheet, rev_elem, _seq_counters[_seq_key])
             try:
                 _rid = rev_id.IntegerValue
             except AttributeError:
