@@ -10,20 +10,43 @@ def _normalise_date(val):
 
     Revit may return: a plain string, a Python datetime.date, or a .NET
     DateTime struct (which has Day/Month/Year but no strftime).
+    An unset RevisionDate often comes back as DateTime.MinValue (year 0001)
+    or a similar sentinel — those are treated as 'no date'.
     """
     if not val:
         return ''
     # Python datetime.date / datetime.datetime
     try:
+        if val.year < 1900:
+            return ''
         return val.strftime('%d/%m/%Y')
     except AttributeError:
         pass
     # .NET DateTime struct exposed via IronPython interop
     try:
-        return '{:02d}/{:02d}/{:04d}'.format(int(val.Day), int(val.Month), int(val.Year))
+        year = int(val.Year)
+        if year < 1900:
+            return ''
+        return '{:02d}/{:02d}/{:04d}'.format(int(val.Day), int(val.Month), year)
     except AttributeError:
         pass
-    return str(val)
+    # Plain string — strip whitespace and reject obvious sentinel values
+    s = str(val).strip()
+    if not s:
+        return ''
+    # Reject year-0001 sentinel strings like '01/01/0001' or '1/1/1'
+    try:
+        from datetime import datetime as _dt
+        for _fmt in ('%d/%m/%Y', '%d/%m/%y', '%m/%d/%Y', '%Y-%m-%d'):
+            try:
+                if _dt.strptime(s, _fmt).year < 1900:
+                    return ''
+                break
+            except ValueError:
+                pass
+    except Exception:
+        pass
+    return s
 
 
 def _get_param(element, name, built_in=None):
