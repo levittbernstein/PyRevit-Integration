@@ -112,8 +112,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
-    # ── Row 3: label → "Issue date", value → today's date ────────────────
-    ws.cell(row=3, column=11).value = 'Issue date'
+    # ── Row 3: label → "Issue date & revision" ───────────────────────────
+    ws.cell(row=3, column=11).value = 'Issue date & revision'
     ws.cell(row=3, column=FIRST_DATE_COL).value = datetime.now().strftime('%d.%m.%Y')
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
@@ -230,11 +230,12 @@ def _write_distribution_block(ws, issue_keys, settings):
 
 
 def _write_date_headers(ws, issue_keys):
-    """Write date into row 11 date columns (date only, no issued_by initials)."""
+    """Write date + revision code (P01, P02…) into row 11 date columns."""
     for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
-        cell.value = _fmt_header(date_str)
+        cell.value = '{}\nP{:02d}'.format(_fmt_header(date_str), col_idx + 1)
+        cell.alignment = Alignment(wrap_text=True, horizontal='center', vertical='center')
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col):

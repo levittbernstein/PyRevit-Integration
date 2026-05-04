@@ -63,48 +63,20 @@
 
     <Grid Margin="16">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>   <!-- Title block -->
             <RowDefinition Height="Auto"/>   <!-- Key -->
             <RowDefinition Height="*"/>      <!-- Distribution matrix -->
             <RowDefinition Height="Auto"/>   <!-- Buttons -->
         </Grid.RowDefinitions>
 
-        <!-- ═══════════════════════ TITLE BLOCK ═══════════════════════ -->
-        <StackPanel Grid.Row="0">
-            <TextBlock Style="{StaticResource SectionHeader}" Text="TITLE BLOCK INFORMATION"/>
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="90"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="16"/>
-                    <ColumnDefinition Width="90"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="34"/>
-                    <RowDefinition Height="34"/>
-                </Grid.RowDefinitions>
-
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="Subject:"    Style="{StaticResource FieldLabel}"/>
-                <TextBox   Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3" x:Name="SubjectBox" Style="{StaticResource FieldBox}"/>
-
-                <TextBlock Grid.Row="1" Grid.Column="0" Text="Drawn by:"   Style="{StaticResource FieldLabel}"/>
-                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="DrawnByBox"   Style="{StaticResource FieldBox}"/>
-
-                <TextBlock Grid.Row="1" Grid.Column="3" Text="Checked by:" Style="{StaticResource FieldLabel}"/>
-                <TextBox   Grid.Row="1" Grid.Column="4" x:Name="CheckedByBox" Style="{StaticResource FieldBox}"/>
-            </Grid>
-        </StackPanel>
-
         <!-- ═══════════════════════ KEY ═══════════════════════════════ -->
-        <StackPanel Grid.Row="1">
+        <StackPanel Grid.Row="0">
             <TextBlock Style="{StaticResource SectionHeader}" Text="KEY"/>
             <TextBlock Margin="0,2,0,0" FontSize="10" Foreground="#555555" TextWrapping="Wrap"
                 Text="Revisions: Pxx Preliminary  |  Cxx Contractual     Distribution: E Email  |  U CDE upload  |  T Newforma  |  X Issue slip only"/>
         </StackPanel>
 
         <!-- ═══════════════════════ DISTRIBUTION ══════════════════════ -->
-        <Grid Grid.Row="2" Margin="0,4,0,0">
+        <Grid Grid.Row="1" Margin="0,4,0,0">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
@@ -127,7 +99,7 @@
         </Grid>
 
         <!-- ═══════════════════════ BUTTONS ═══════════════════════════ -->
-        <StackPanel Grid.Row="3" Orientation="Horizontal"
+        <StackPanel Grid.Row="2" Orientation="Horizontal"
                     HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="Cancel"          Style="{StaticResource CancelButton}" Margin="0,0,8,0"/>
             <Button Content="Export Register" Style="{StaticResource ActionButton}"/>

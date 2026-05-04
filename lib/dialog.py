@@ -45,10 +45,6 @@ class ExportDialog(object):
         xaml_path = os.path.join(os.path.dirname(__file__), 'dialog.xaml')
         self._win = _load_xaml(xaml_path)
 
-        self._win.FindName('SubjectBox').Text    = settings['title_block'].get('subject',     '')
-        self._win.FindName('DrawnByBox').Text    = settings['title_block'].get('drawn_by',    '')
-        self._win.FindName('CheckedByBox').Text  = settings['title_block'].get('checked_by',  '')
-
         self._recipients = [dict(r) for r in settings.get('recipients', [])]
         self._build_grid()
         self._wire_buttons()
@@ -110,10 +106,8 @@ class ExportDialog(object):
         container.RowDefinitions.Add(rd)
 
         self._header_cell(container, 'RECIPIENT', 0, 0)
-        for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
-            label = self._fmt_date(date_str)
-            if issued_by:
-                label += '\n' + issued_by
+        for col_idx, (date_str, _issued_by) in enumerate(self._issue_keys):
+            label = self._fmt_date(date_str) + '\nP{:02d}'.format(col_idx + 1)
             self._header_cell(container, label, 0, col_idx + 1)
 
         # ── Recipient rows ────────────────────────────────────────────
@@ -262,11 +256,6 @@ class ExportDialog(object):
             return False, self._settings
 
         updated = dict(self._settings)
-        updated['title_block'] = {
-            'subject':    self._win.FindName('SubjectBox').Text.strip(),
-            'drawn_by':   self._win.FindName('DrawnByBox').Text.strip(),
-            'checked_by': self._win.FindName('CheckedByBox').Text.strip(),
-        }
 
         updated_recipients = [
             {'name': nb.Text.strip(), 'row': self._recipients[i].get('row', i + 4)}
