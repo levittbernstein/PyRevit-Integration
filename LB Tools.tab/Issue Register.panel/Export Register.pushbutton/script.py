@@ -119,15 +119,16 @@ payload = {
     'lib_path':      _EXT_LIB,
 }
 
-tmp_json = tempfile.NamedTemporaryFile(
-    suffix='.json', delete=False, mode='w', encoding='utf-8')
+import io as _io
+tmp_fd, tmp_json_name = tempfile.mkstemp(suffix='.json')
+os.close(tmp_fd)
 try:
-    json.dump(payload, tmp_json, ensure_ascii=False)
-    tmp_json.close()
+    with _io.open(tmp_json_name, 'w', encoding='utf-8') as _fh:
+        json.dump(payload, _fh, ensure_ascii=False)
 
     worker_py = os.path.join(_EXT_LIB, 'worker.py')
     result = subprocess.Popen(
-        [_cpython, worker_py, tmp_json.name],
+        [_cpython, worker_py, tmp_json_name],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
@@ -136,7 +137,7 @@ try:
     stderr = stderr_b.decode('utf-8', errors='replace').strip()
 finally:
     try:
-        os.unlink(tmp_json.name)
+        os.unlink(tmp_json_name)
     except Exception:
         pass
 
