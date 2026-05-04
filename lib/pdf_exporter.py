@@ -124,7 +124,7 @@ def _export_via_excel_com(excel_path, pdf_path):
         # ── Fit to single page ────────────────────────────────────────────────
         out_ws.PageSetup.Zoom           = False
         out_ws.PageSetup.FitToPagesWide = 1
-        out_ws.PageSetup.FitToPagesTall = 0  # unlimited — fills width, flows to multiple pages
+        out_ws.PageSetup.FitToPagesTall = False  # unlimited — fills width, flows to multiple pages
 
         # ── Export PDF ────────────────────────────────────────────────────────
         excel.Interactive = True
