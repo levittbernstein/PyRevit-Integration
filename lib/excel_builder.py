@@ -71,6 +71,30 @@ def _copy_cell_style(src, dst):
         dst.alignment = src.alignment.copy()
 
 
+def _snapshot_style(cell):
+    """Capture all style properties as independent copies before the cell is modified."""
+    if not cell.has_style:
+        return None
+    return {
+        'font':          cell.font.copy(),
+        'fill':          cell.fill.copy(),
+        'border':        cell.border.copy(),
+        'alignment':     cell.alignment.copy(),
+        'number_format': cell.number_format,
+    }
+
+
+def _apply_snapshot(cell, snap):
+    """Apply a style snapshot captured by _snapshot_style."""
+    if snap is None:
+        return
+    cell.font          = snap['font'].copy()
+    cell.fill          = snap['fill'].copy()
+    cell.border        = snap['border'].copy()
+    cell.alignment     = snap['alignment'].copy()
+    cell.number_format = snap['number_format']
+
+
 def _unmerge_region(ws, min_row, max_row, min_col, max_col):
     """Remove all merges overlapping a region and flush stale MergedCell cache entries.
 
@@ -98,12 +122,23 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     n_dates  = len(issue_keys)
     last_col = FIRST_DATE_COL + n_dates - 1
 
+    # Snapshot date-column styles BEFORE any modifications so they survive
+    # the unmerge/clear cycle that replaces cell objects in ws._cells.
+    _date_data_snap   = _snapshot_style(ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL))
+    _date_hdr_snap    = _snapshot_style(ws.cell(row=HEADER_ROW,     column=FIRST_DATE_COL))
+    _date_r3_snap     = _snapshot_style(ws.cell(row=3,              column=FIRST_DATE_COL))
+    _date_col_width   = ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57
+
     # How many date columns are already in the template?
     template_date_cols = ws.max_column - (FIRST_DATE_COL - 1)
 
     # ── Expand date columns if we need more than the template provides ─────
     if n_dates > template_date_cols:
         _expand_date_columns(ws, template_date_cols, n_dates)
+
+    # ── Set ALL date column widths to a consistent value ──────────────────
+    for _ci in range(n_dates):
+        ws.column_dimensions[get_column_letter(FIRST_DATE_COL + _ci)].width = _date_col_width
 
     # ── Widen columns B-H ────────────────────────────────────────────────
     for _col, _w in [('B', 9), ('C', 9), ('D', 9), ('E', 9), ('F', 9), ('G', 9), ('H', 22)]:
@@ -112,24 +147,31 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
-    # ── Row 3: label, then per-column "[date] | P01" ─────────────────────
-    ws.cell(row=3, column=11).value = 'Issue date & revision'
-    _r3_ref = ws.cell(row=3, column=FIRST_DATE_COL)   # capture style before unmerge
-    _unmerge_region(ws, 3, 3, FIRST_DATE_COL, last_col)
+    # ── Row 3: label merged over I:K (cols 9-11), rotated date cells L+ ──
+    # Snapshot label cell style before unmerging, then re-merge I3:K3.
+    _r3_lbl_snap = _snapshot_style(ws.cell(row=3, column=9))
+    _unmerge_region(ws, 3, 3, 9, last_col)
+    ws.merge_cells(start_row=3, start_column=9, end_row=3, end_column=11)
+    _lbl = ws.cell(row=3, column=9)
+    if _r3_lbl_snap:
+        _apply_snapshot(_lbl, _r3_lbl_snap)
+    _lbl.value     = 'Issue date & revision'
+    _lbl.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+
     for _ci, (_ds, _) in enumerate(issue_keys):
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
-        _copy_cell_style(_r3_ref, _c)
-        _c.value = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
+        _apply_snapshot(_c, _date_r3_snap)
+        _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
         _c.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
 
     # ── Row 11: date column headers ───────────────────────────────────────
-    _write_date_headers(ws, issue_keys)
+    _write_date_headers(ws, issue_keys, _date_hdr_snap)
 
     # ── Rows 12+: drawing data ────────────────────────────────────────────
-    last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col)
+    last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col, _date_data_snap)
 
     # ── Fix merge for row 1 and 2 to cover all columns ────────────────────
     _remerge_row(ws, 1, last_col)
@@ -244,21 +286,21 @@ def _write_distribution_block(ws, issue_keys, settings):
             code_cell.value = code
 
 
-def _write_date_headers(ws, issue_keys):
+def _write_date_headers(ws, issue_keys, date_snap=None):
     """Write date into row 11 date columns, rotated 90°."""
     for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
-        cell.value = _fmt_header(date_str)
+        _apply_snapshot(cell, date_snap)
+        cell.value     = _fmt_header(date_str)
         cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
 
-def _write_data_rows(ws, sheets_data, issue_keys, last_col):
+def _write_data_rows(ws, sheets_data, issue_keys, last_col, date_snap=None):
     issue_idx = {key: i for i, key in enumerate(issue_keys)}
 
-    # Get style reference from template row 12 (first data row)
-    ref_cols  = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, last_col + 1)}
-    date_ref  = ref_cols.get(FIRST_DATE_COL)   # canonical style for ALL date cells
+    # Capture non-date column styles from template row 12 before unmerge/clear.
+    ref_cols = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, FIRST_DATE_COL)}
 
     # Unmerge and clear all data rows
     _unmerge_region(ws, DATA_ROW_START, ws.max_row, 1, ws.max_column)
@@ -280,10 +322,15 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col):
         ws.row_dimensions[current_row].height = _DATA_ROW_HEIGHT
         r = current_row
 
-        # Restore styles — date columns all use the same reference cell
+        # Restore styles: left columns from template refs, date columns from snapshot.
         for c in range(1, last_col + 1):
-            src = date_ref if c >= FIRST_DATE_COL else ref_cols.get(c, ref_cols.get(min(c, 11)))
-            _copy_cell_style(src, ws.cell(row=r, column=c))
+            target = ws.cell(row=r, column=c)
+            if c >= FIRST_DATE_COL:
+                _apply_snapshot(target, date_snap)
+            else:
+                src = ref_cols.get(c, ref_cols.get(min(c, FIRST_DATE_COL - 1)))
+                if src is not None:
+                    _copy_cell_style(src, target)
 
         values = [
             (1,  sheet['sheet_type'],           'center'),
