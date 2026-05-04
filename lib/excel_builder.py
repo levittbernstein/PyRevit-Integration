@@ -92,7 +92,7 @@ def _unmerge_region(ws, min_row, max_row, min_col, max_col):
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def build_register(sheets_data, issue_keys, settings, output_path, project_info):
-    wb = load_workbook(_TEMPLATE, rich_text=True)
+    wb = load_workbook(_TEMPLATE)
     ws = wb.active
 
     n_dates  = len(issue_keys)
