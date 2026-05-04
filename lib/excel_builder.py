@@ -103,13 +103,9 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
-    # ── Row 3: issue date reference ───────────────────────────────────────
-    latest_text = ''
-    if issue_keys:
-        latest_date, latest_by = issue_keys[-1]
-        latest_code = _latest_code(sheets_data, latest_date, latest_by)
-        latest_text = '{}  |  {}'.format(_fmt_title(latest_date), latest_code)
-    ws.cell(row=3, column=FIRST_DATE_COL).value = latest_text
+    # ── Row 3: label → "Issue date", value → today's date ────────────────
+    ws.cell(row=3, column=11).value = 'Issue date'
+    ws.cell(row=3, column=FIRST_DATE_COL).value = datetime.now().strftime('%d.%m.%Y')
 
     # ── Rows 4-10: distribution block ─────────────────────────────────────
     _write_distribution_block(ws, issue_keys, settings)
@@ -185,6 +181,12 @@ def _write_distribution_block(ws, issue_keys, settings):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
 
+    # Capture style references BEFORE unmerge flushes the cell cache.
+    # After _unmerge_region these cell objects are no longer in ws._cells but the
+    # Python objects still hold their style data, so _copy_cell_style still works.
+    ref_label = ws.cell(row=4, column=10)          # J4 'Client' — grey label style
+    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)  # L4 — date-column style
+
     # Unmerge everything in rows 4-10 cols I+ and flush stale MergedCell cache
     _unmerge_region(ws, 4, 10, 9, ws.max_column)
 
@@ -192,10 +194,6 @@ def _write_distribution_block(ws, issue_keys, settings):
     for r in range(4, 11):
         for c in range(9, ws.max_column + 1):
             ws.cell(row=r, column=c).value = None
-
-    # Get reference style for recipient label and code cells from template row 4
-    ref_label = ws.cell(row=4, column=10)   # 'Client' cell in template (col J)
-    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)
 
     for i, recipient in enumerate(recipients[:_MAX_RECIPIENTS]):
         row    = 4 + i
@@ -227,14 +225,11 @@ def _write_distribution_block(ws, issue_keys, settings):
 
 
 def _write_date_headers(ws, issue_keys):
-    """Write date+issued_by text into row 11 date columns, keeping template style."""
-    for col_idx, (date_str, issued_by) in enumerate(issue_keys):
+    """Write date into row 11 date columns (date only, no issued_by initials)."""
+    for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
         cell = ws.cell(row=HEADER_ROW, column=col)
-        hdr  = _fmt_header(date_str)
-        if issued_by:
-            hdr += '\n' + issued_by
-        cell.value = hdr
+        cell.value = _fmt_header(date_str)
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col):

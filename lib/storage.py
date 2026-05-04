@@ -28,7 +28,14 @@ _DEFAULT_SETTINGS = {
         'checked_by':   '',
         'approved_by':  '',
     },
-    'recipients': [],
+    'recipients': [
+        {'name': 'Client'},
+        {'name': 'Contractor'},
+        {'name': 'Project Manager'},
+        {'name': 'Structures'},
+        {'name': 'MEP'},
+        {'name': 'Extranet upload'},
+    ],
     'issues': {},
 }
 
