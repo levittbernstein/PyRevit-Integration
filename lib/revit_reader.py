@@ -8,14 +8,22 @@ from collections import OrderedDict
 def _normalise_date(val):
     """Return a DD/MM/YYYY string from whatever RevisionDate gives us.
 
-    Revit 2024+ returns datetime.date; older versions return a plain string.
+    Revit may return: a plain string, a Python datetime.date, or a .NET
+    DateTime struct (which has Day/Month/Year but no strftime).
     """
     if not val:
         return ''
+    # Python datetime.date / datetime.datetime
     try:
-        return val.strftime('%d/%m/%Y')   # datetime.date / datetime.datetime
+        return val.strftime('%d/%m/%Y')
     except AttributeError:
-        return str(val)
+        pass
+    # .NET DateTime struct exposed via IronPython interop
+    try:
+        return '{:02d}/{:02d}/{:04d}'.format(int(val.Day), int(val.Month), int(val.Year))
+    except AttributeError:
+        pass
+    return str(val)
 
 
 def _get_param(element, name, built_in=None):
@@ -177,6 +185,27 @@ def get_sheets_data(doc):
         .ToElements()
     )
 
+    # ── Pre-build titleblock lookup (one collector for the whole model) ──────
+    # Running a scoped FilteredElementCollector per sheet is very slow on large
+    # models.  Collect everything once and index by OwnerViewId.
+    _tb_name_by_sheet = {}   # ElementId → family name string
+    _tb_sym_by_sheet  = {}   # ElementId → FamilySymbol (for dimension fallback)
+    try:
+        from Autodesk.Revit.DB import FamilyInstance, BuiltInCategory  # noqa: PLC0415
+        for _tb in (FilteredElementCollector(doc)
+                    .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                    .OfClass(FamilyInstance)
+                    .ToElements()):
+            try:
+                _oid = _tb.OwnerViewId
+                if _oid not in _tb_name_by_sheet:
+                    _tb_name_by_sheet[_oid] = _tb.Symbol.Family.Name
+                    _tb_sym_by_sheet[_oid]  = _tb.Symbol
+            except Exception:
+                pass
+    except Exception:
+        pass
+
     result = []
     for sheet in sheets:
         if not sheet.CanBePrinted:
@@ -193,49 +222,30 @@ def get_sheets_data(doc):
         discipline           = _get_param(sheet, 'Discipline')
         sheet_type           = _get_param(sheet, 'Sheet Type')
 
-        # Sheet size — primary: parse titleblock family name; fallback: sheet dimensions
+        # Sheet size — O(1) lookup into pre-built dict
         size = ''
-        try:
-            from Autodesk.Revit.DB import FamilyInstance, BuiltInCategory  # noqa: PLC0415
-
-            # Try view-scoped collector first
-            tb = (FilteredElementCollector(doc, sheet.Id)
-                  .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                  .OfClass(FamilyInstance)
-                  .FirstElement())
-
-            # Fallback: scan all titleblocks and match by OwnerViewId
-            if tb is None:
-                for candidate in (FilteredElementCollector(doc)
-                                  .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                                  .OfClass(FamilyInstance)
-                                  .ToElements()):
-                    try:
-                        if candidate.OwnerViewId == sheet.Id:
-                            tb = candidate
-                            break
-                    except Exception:
-                        pass
-
-            if tb is not None:
-                family_name = tb.Symbol.Family.Name
-                # 1. Try name match: "LB-A1-Titleblock", "A3 Drawing", etc.
-                m = re.search(r'A[0-4](?!\d)', family_name, re.IGNORECASE)
-                if m:
-                    size = m.group(0).upper()
-                else:
-                    # 2. Try Width/Height parameters on the titleblock symbol
-                    try:
-                        sym = tb.Symbol
+        family_name = _tb_name_by_sheet.get(sheet.Id, '')
+        if family_name:
+            m = re.search(r'A[0-4](?!\d)', family_name, re.IGNORECASE)
+            if m:
+                size = m.group(0).upper()
+            else:
+                # Try Width/Height from the symbol
+                try:
+                    sym = _tb_sym_by_sheet.get(sheet.Id)
+                    if sym:
+                        w_p = h_p = None
                         for w_name in ('Width', 'Sheet Width', 'W'):
-                            w_p = sym.LookupParameter(w_name)
-                            if w_p and w_p.HasValue:
+                            _p = sym.LookupParameter(w_name)
+                            if _p and _p.HasValue:
+                                w_p = _p
                                 break
                         for h_name in ('Height', 'Sheet Height', 'H'):
-                            h_p = sym.LookupParameter(h_name)
-                            if h_p and h_p.HasValue:
+                            _p = sym.LookupParameter(h_name)
+                            if _p and _p.HasValue:
+                                h_p = _p
                                 break
-                        if w_p and h_p and w_p.HasValue and h_p.HasValue:
+                        if w_p and h_p:
                             try:
                                 from Autodesk.Revit.DB import UnitTypeId  # noqa: PLC0415
                                 w_mm = UnitUtils.ConvertFromInternalUnits(w_p.AsDouble(), UnitTypeId.Millimeters)
@@ -245,14 +255,10 @@ def get_sheets_data(doc):
                                 w_mm = UnitUtils.ConvertFromInternalUnits(w_p.AsDouble(), DisplayUnitType.DUT_MILLIMETERS)
                                 h_mm = UnitUtils.ConvertFromInternalUnits(h_p.AsDouble(), DisplayUnitType.DUT_MILLIMETERS)
                             size = _paper_size(w_mm, h_mm)
-                    except Exception:
-                        pass
-                    if not size:
-                        print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
-            else:
-                print('LB Issue Register — no titleblock on sheet {}'.format(sheet_number))
-        except Exception as _tb_err:
-            print('LB Issue Register — titleblock size error: {}'.format(_tb_err))
+                except Exception:
+                    pass
+                if not size:
+                    print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
 
         if not size:
             try:
@@ -351,14 +357,15 @@ def collect_issue_dates(sheets_data):
 
     # Sort by parsing the date string DD/MM/YY or DD/MM/YYYY
     def _date_sort(key):
-        date_str = str(key[0])  # guard: _normalise_date should give str already
-        for fmt in ('%d/%m/%y', '%d/%m/%Y', '%d.%m.%y', '%d.%m.%Y'):
+        from datetime import datetime  # noqa: PLC0415
+        date_str = str(key[0])
+        for fmt in ('%d/%m/%y', '%d/%m/%Y', '%d.%m.%y', '%d.%m.%Y',
+                    '%m/%d/%y', '%m/%d/%Y', '%Y-%m-%d'):
             try:
-                from datetime import datetime  # noqa: PLC0415
                 return datetime.strptime(date_str, fmt)
-            except (ValueError, ImportError, TypeError):
+            except (ValueError, TypeError):
                 pass
-        return date_str  # fallback: sort as string (consistent type)
+        return datetime.min  # always datetime — IronPython can't compare datetime vs str
 
     sorted_keys = sorted(seen.keys(), key=_date_sort)
     return sorted_keys  # list of (date_str, issued_by) tuples
