@@ -1,14 +1,22 @@
 # -*- coding: utf-8 -*-
 """Export an Excel file to PDF.
 
-Tries LibreOffice (headless) first — it preserves rich text, bold, colours.
-Falls back to Excel COM automation if LibreOffice is not installed.
+Strategy:
+  1. LibreOffice headless (preserves all rich text/colour — best quality).
+  2. Excel COM: open template + output in the same session, copy A4 and A7
+     (the KEY Revisions and disclaimer cells) back from the template to
+     restore rich text that openpyxl stripped, then ExportAsFixedFormat.
 """
 
 import os
 import shutil
 import subprocess
 
+
+_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template.xltx')
+
+
+# ── LibreOffice ───────────────────────────────────────────────────────────────
 
 def _find_libreoffice():
     candidates = [
@@ -35,13 +43,14 @@ def _export_via_libreoffice(soffice_exe, excel_path, pdf_path):
         msg = (stderr_b or stdout_b).decode('utf-8', errors='replace')
         raise RuntimeError('LibreOffice PDF export failed:\n' + msg)
 
-    # LibreOffice writes <basename>.pdf into outdir
     generated = os.path.join(out_dir,
                              os.path.splitext(os.path.basename(xlsx_abs))[0] + '.pdf')
     target = os.path.abspath(pdf_path)
     if os.path.normcase(generated) != os.path.normcase(target) and os.path.exists(generated):
         shutil.move(generated, target)
 
+
+# ── Excel COM ─────────────────────────────────────────────────────────────────
 
 def _export_via_excel_com(excel_path, pdf_path):
     try:
@@ -53,21 +62,50 @@ def _export_via_excel_com(excel_path, pdf_path):
             'in pyRevit\'s CPython environment, then retry.'
         )
 
-    excel = None
-    wb    = None
+    excel   = None
+    tmpl_wb = None
+    out_wb  = None
     try:
         excel = win32.Dispatch('Excel.Application')
         excel.Visible          = False
         excel.DisplayAlerts    = False
         excel.AskToUpdateLinks = False
 
-        wb = excel.Workbooks.Open(
+        out_wb = excel.Workbooks.Open(
             os.path.abspath(excel_path),
             UpdateLinks=False,
-            ReadOnly=True,
+            ReadOnly=False,
         )
-        ws = wb.Worksheets(1)
-        ws.ExportAsFixedFormat(
+        out_ws = out_wb.Worksheets(1)
+
+        # ── Restore rich text from template ──────────────────────────────────
+        # openpyxl strips character-level formatting (bold/colour/underline)
+        # when loading the template.  Re-copy those cells from the original
+        # .xltx before exporting so the PDF has the correct formatting.
+        if os.path.exists(_TEMPLATE):
+            try:
+                tmpl_wb = excel.Workbooks.Open(
+                    os.path.abspath(_TEMPLATE),
+                    UpdateLinks=False,
+                    ReadOnly=True,
+                )
+                tmpl_ws = tmpl_wb.Worksheets(1)
+                # A4:H6  — KEY Revisions cell (merged, value in A4)
+                # A7:H10 — disclaimer cell     (merged, value in A7)
+                for row in (4, 7):
+                    try:
+                        tmpl_ws.Cells(row, 1).Copy(out_ws.Cells(row, 1))
+                    except Exception:
+                        pass
+                excel.CutCopyMode = False
+                tmpl_wb.Close(SaveChanges=False)
+                tmpl_wb = None
+                out_wb.Save()
+            except Exception:
+                pass  # rich text restore is best-effort — still export what we have
+
+        # ── Export PDF ────────────────────────────────────────────────────────
+        out_ws.ExportAsFixedFormat(
             Type=0,
             Filename=os.path.abspath(pdf_path),
             Quality=0,
@@ -75,6 +113,7 @@ def _export_via_excel_com(excel_path, pdf_path):
             IgnorePrintAreas=False,
             OpenAfterPublish=False,
         )
+
     except Exception as exc:
         raise RuntimeError(
             'Excel COM PDF export failed: {}\n\n'
@@ -82,17 +121,18 @@ def _export_via_excel_com(excel_path, pdf_path):
             'blocking automation (e.g. an open dialog box).'.format(exc)
         )
     finally:
-        if wb is not None:
-            try:
-                wb.Close(SaveChanges=False)
-            except Exception:
-                pass
+        if tmpl_wb is not None:
+            try: tmpl_wb.Close(SaveChanges=False)
+            except Exception: pass
+        if out_wb is not None:
+            try: out_wb.Close(SaveChanges=False)
+            except Exception: pass
         if excel is not None:
-            try:
-                excel.Quit()
-            except Exception:
-                pass
+            try: excel.Quit()
+            except Exception: pass
 
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 def export_pdf(excel_path, pdf_path):
     """Export *excel_path* to *pdf_path*, trying LibreOffice then Excel COM."""

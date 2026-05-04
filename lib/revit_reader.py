@@ -185,17 +185,37 @@ def get_sheets_data(doc):
         size = ''
         try:
             from Autodesk.Revit.DB import FamilyInstance, BuiltInCategory  # noqa: PLC0415
-            tb_col = (FilteredElementCollector(doc, sheet.Id)
-                      .OfCategory(BuiltInCategory.OST_TitleBlocks)
-                      .OfClass(FamilyInstance))
-            tb = tb_col.FirstElement()
-            if tb:
+
+            # Try view-scoped collector first
+            tb = (FilteredElementCollector(doc, sheet.Id)
+                  .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                  .OfClass(FamilyInstance)
+                  .FirstElement())
+
+            # Fallback: scan all titleblocks and match by OwnerViewId
+            if tb is None:
+                for candidate in (FilteredElementCollector(doc)
+                                  .OfCategory(BuiltInCategory.OST_TitleBlocks)
+                                  .OfClass(FamilyInstance)
+                                  .ToElements()):
+                    try:
+                        if candidate.OwnerViewId == sheet.Id:
+                            tb = candidate
+                            break
+                    except Exception:
+                        pass
+
+            if tb is not None:
                 family_name = tb.Symbol.Family.Name
-                m = re.search(r'\bA[0-4]\b', family_name, re.IGNORECASE)
+                m = re.search(r'A[0-4](?!\d)', family_name, re.IGNORECASE)
                 if m:
                     size = m.group(0).upper()
-        except Exception:
-            pass
+                else:
+                    print('LB Issue Register — titleblock "{}": no A0-A4 found'.format(family_name))
+            else:
+                print('LB Issue Register — no titleblock on sheet {}'.format(sheet_number))
+        except Exception as _tb_err:
+            print('LB Issue Register — titleblock size error: {}'.format(_tb_err))
 
         if not size:
             try:
