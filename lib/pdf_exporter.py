@@ -52,6 +52,21 @@ def _export_via_libreoffice(soffice_exe, excel_path, pdf_path):
 
 # ── Excel COM ─────────────────────────────────────────────────────────────────
 
+def _copy_rich_text(src, dst):
+    """Copy value + character-level formatting from COM Range src to dst."""
+    dst.Value = src.Value
+    n = src.Characters.Count
+    for i in range(1, n + 1):
+        sf = src.Characters(i, 1).Font
+        df = dst.Characters(i, 1).Font
+        df.Bold      = sf.Bold
+        df.Italic    = sf.Italic
+        df.Underline = sf.Underline
+        df.Color     = sf.Color
+        df.Size      = sf.Size
+        df.Name      = sf.Name
+
+
 def _export_via_excel_com(excel_path, pdf_path):
     try:
         import win32com.client as win32
@@ -83,26 +98,19 @@ def _export_via_excel_com(excel_path, pdf_path):
         # when loading the template.  Re-copy those cells from the original
         # .xltx before exporting so the PDF has the correct formatting.
         if os.path.exists(_TEMPLATE):
-            try:
-                tmpl_wb = excel.Workbooks.Open(
-                    os.path.abspath(_TEMPLATE),
-                    UpdateLinks=False,
-                    ReadOnly=True,
-                )
-                tmpl_ws = tmpl_wb.Worksheets(1)
-                # A4:H6  — KEY Revisions cell (merged, value in A4)
-                # A7:H10 — disclaimer cell     (merged, value in A7)
-                for row in (4, 7):
-                    try:
-                        tmpl_ws.Cells(row, 1).Copy(out_ws.Cells(row, 1))
-                    except Exception:
-                        pass
-                excel.CutCopyMode = False
-                tmpl_wb.Close(SaveChanges=False)
-                tmpl_wb = None
-                out_wb.Save()
-            except Exception:
-                pass  # rich text restore is best-effort — still export what we have
+            tmpl_wb = excel.Workbooks.Open(
+                os.path.abspath(_TEMPLATE),
+                UpdateLinks=False,
+                ReadOnly=True,
+            )
+            tmpl_ws = tmpl_wb.Worksheets(1)
+            # A4:H6  — KEY Revisions cell (merged, value in A4)
+            # A7:H10 — disclaimer cell     (merged, value in A7)
+            for row in (4, 7):
+                _copy_rich_text(tmpl_ws.Cells(row, 1), out_ws.Cells(row, 1))
+            tmpl_wb.Close(SaveChanges=False)
+            tmpl_wb = None
+            out_wb.Save()
 
         # ── Export PDF ────────────────────────────────────────────────────────
         out_ws.ExportAsFixedFormat(

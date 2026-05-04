@@ -123,7 +123,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _write_date_headers(ws, issue_keys)
 
     # ── Rows 12+: drawing data ────────────────────────────────────────────
-    _write_data_rows(ws, sheets_data, issue_keys, last_col)
+    last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col)
 
     # ── Fix merge for row 1 and 2 to cover all columns ────────────────────
     _remerge_row(ws, 1, last_col)
@@ -133,8 +133,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Freeze panes ──────────────────────────────────────────────────────
     ws.freeze_panes = ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL)
 
-    # ── Print area ────────────────────────────────────────────────────────
-    ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), ws.max_row)
+    # ── Print area: stop at the last written data row ─────────────────────
+    ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
 
     wb.template = False
     wb.save(output_path)
@@ -292,3 +292,5 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col):
                 ws.cell(row=r, column=col).value = rev['code']
 
         current_row += 1
+
+    return current_row - 1  # last row with data
