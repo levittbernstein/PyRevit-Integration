@@ -156,6 +156,12 @@ def _merge_defaults(saved, defaults):
     for key, val in defaults.items():
         if key not in saved:
             saved[key] = val
+        elif key == 'recipients' and isinstance(val, list):
+            # Add any default recipients not already present (keeps custom ones too)
+            existing = {r.get('name', '') for r in saved[key]}
+            for r in val:
+                if r.get('name', '') not in existing:
+                    saved[key].append(r)
         elif isinstance(val, dict):
             for sub_key, sub_val in val.items():
                 if sub_key not in saved[key]:

@@ -106,8 +106,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _expand_date_columns(ws, template_date_cols, n_dates)
 
     # ── Widen col H so the KEY Revisions text is fully visible ────────────
-    if ws.column_dimensions['H'].width < 12:
-        ws.column_dimensions['H'].width = 12
+    ws.column_dimensions['H'].width = 22
 
     # ── Row 1: project name ───────────────────────────────────────────────
     ws.cell(row=1, column=1).value = project_info.get('project_name', '')
