@@ -178,8 +178,6 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     for _col, _w in [('B', 9), ('C', 9), ('D', 9), ('E', 9), ('F', 9), ('G', 9), ('H', 22)]:
         ws.column_dimensions[_col].width = _w
 
-    # ── Row 1: project name ───────────────────────────────────────────────
-    ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
     # ── Row 3: label merged I:K (cols 9-11), right-aligned flush against date cols ──
     _r3_lbl_snap = _snapshot_style(ws.cell(row=3, column=9))
@@ -208,11 +206,20 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _write_date_headers(ws, issue_keys, _date_hdr_snap, eff_header_row)
 
     # ── Merge each column header cell with its padding rows ───────────────
-    # This makes every column-label cell tall enough for rotated text.
+    # Snapshot before unmerge — _unmerge_region pops cells from ws._cells,
+    # destroying the values/styles written by _write_date_headers above.
+    _hdr_snaps  = {c: _snapshot_style(ws.cell(row=eff_header_row, column=c))
+                   for c in range(1, last_col + 1)}
+    _hdr_values = {c: ws.cell(row=eff_header_row, column=c).value
+                   for c in range(1, last_col + 1)}
+
     _unmerge_region(ws, eff_header_row, eff_data_start - 1, 1, last_col)
     for _mc in range(1, last_col + 1):
         ws.merge_cells(start_row=eff_header_row, start_column=_mc,
                        end_row=eff_data_start - 1, end_column=_mc)
+        _anchor = ws.cell(row=eff_header_row, column=_mc)
+        _apply_snapshot(_anchor, _hdr_snaps[_mc])
+        _anchor.value = _hdr_values[_mc]
 
     # ── Drawing data rows ─────────────────────────────────────────────────
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
@@ -221,6 +228,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Fix merge for rows 1 and 2 to cover all columns ──────────────────
     _remerge_row(ws, 1, last_col)
     _remerge_row(ws, 2, last_col)
+    # Write project name AFTER remerge — _remerge_row pops (1,1) from ws._cells.
+    ws.cell(row=1, column=1).value = project_info.get('project_name', '')
 
     # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
     for _cn, _cl in ((9, 'I'), (11, 'K')):
