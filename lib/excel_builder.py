@@ -1,0 +1,297 @@
+# -*- coding: utf-8 -*-
+"""
+Build the issue register Excel workbook by filling data into the LB template.
+
+The template (lib/template.xltx) already contains all formatting for:
+  - Rows 1-11  (header, key, disclaimer, distribution block, column headers)
+  - Rows 12+   (pre-formatted data rows)
+  - Date columns L+ (pre-formatted empty cells)
+
+We load the template, clear/overwrite content, and save.
+"""
+
+import os
+from datetime import datetime
+
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+_TEMPLATE = os.path.join(os.path.dirname(__file__), 'template.xltx')
+
+# ── Layout constants (must match template) ───────────────────────────────────
+HEADER_ROW     = 11
+DATA_ROW_START = 12
+FIRST_DATE_COL = 12   # column L
+
+_HEADER_LABELS = [
+    'Drawing Package', 'Project', 'Originator',
+    'Functional Breakdown', 'Spatial Breakdown', 'Form', 'Discipline',
+    'Number', 'Document Title', 'Size', 'Scale',
+]
+
+_DATA_ROW_HEIGHT = 21.6
+_MAX_RECIPIENTS  = 7
+
+
+# ── Date helpers ──────────────────────────────────────────────────────────────
+
+def _parse_date(date_str):
+    for fmt in ('%d/%m/%y', '%d/%m/%Y', '%d.%m.%y', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    return None
+
+
+def _fmt_header(date_str):
+    dt = _parse_date(date_str)
+    return dt.strftime('%d/%m/%y') if dt else date_str
+
+
+def _fmt_title(date_str):
+    dt = _parse_date(date_str)
+    return dt.strftime('%d.%m.%Y') if dt else date_str
+
+
+# ── Style cloning helpers ─────────────────────────────────────────────────────
+
+def _copy_cell_style(src, dst):
+    """Copy font, fill, border, alignment from src cell to dst cell."""
+    if src.has_style:
+        dst.font      = src.font.copy()
+        dst.fill      = src.fill.copy()
+        dst.border    = src.border.copy()
+        dst.alignment = src.alignment.copy()
+
+
+def _get_style_cell(ws, row, col):
+    """Return a cell to use as style reference, reading past merges if needed."""
+    cell = ws.cell(row=row, column=col)
+    if cell.data_type == 'n' and cell.value is None:
+        return cell
+    return cell
+
+
+# ── Main entry point ──────────────────────────────────────────────────────────
+
+def build_register(sheets_data, issue_keys, settings, output_path, project_info):
+    wb = load_workbook(_TEMPLATE)
+    ws = wb.active
+
+    n_dates  = len(issue_keys)
+    last_col = FIRST_DATE_COL + n_dates - 1
+
+    # How many date columns are already in the template?
+    template_date_cols = ws.max_column - (FIRST_DATE_COL - 1)
+
+    # ── Expand date columns if we need more than the template provides ─────
+    if n_dates > template_date_cols:
+        _expand_date_columns(ws, template_date_cols, n_dates)
+
+    # ── Row 1: project name ───────────────────────────────────────────────
+    ws.cell(row=1, column=1).value = project_info.get('project_name', '')
+
+    # ── Row 3: issue date reference ───────────────────────────────────────
+    latest_text = ''
+    if issue_keys:
+        latest_date, latest_by = issue_keys[-1]
+        latest_code = _latest_code(sheets_data, latest_date, latest_by)
+        latest_text = '{}  |  {}'.format(_fmt_title(latest_date), latest_code)
+    ws.cell(row=3, column=FIRST_DATE_COL).value = latest_text
+
+    # ── Rows 4-10: distribution block ─────────────────────────────────────
+    _write_distribution_block(ws, issue_keys, settings)
+
+    # ── Row 11: date column headers ───────────────────────────────────────
+    _write_date_headers(ws, issue_keys)
+
+    # ── Rows 12+: drawing data ────────────────────────────────────────────
+    _write_data_rows(ws, sheets_data, issue_keys, last_col)
+
+    # ── Fix merge for row 1 and 2 to cover all columns ────────────────────
+    _remerge_row(ws, 1, last_col)
+    _remerge_row(ws, 2, last_col)
+    _remerge_row(ws, 3, last_col, start_col=FIRST_DATE_COL)
+
+    # ── Freeze panes ──────────────────────────────────────────────────────
+    ws.freeze_panes = ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL)
+
+    # ── Print area ────────────────────────────────────────────────────────
+    ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), ws.max_row)
+
+    wb.save(output_path)
+    return output_path
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _latest_code(sheets_data, date_str, issued_by):
+    codes = [
+        rev['code']
+        for sheet in sheets_data
+        for rev in sheet['revisions']
+        if rev['date'] == date_str and rev.get('issued_by', '') == issued_by
+    ]
+    if not codes:
+        return ''
+    c = [x for x in codes if x.upper().startswith('C')]
+    p = [x for x in codes if x.upper().startswith('P')]
+    return sorted(c or p or codes)[-1]
+
+
+def _remerge_row(ws, row, last_col, start_col=1):
+    """Remove any existing merge on the row and re-merge from start_col to last_col."""
+    to_remove = [
+        m for m in ws.merged_cells.ranges
+        if m.min_row == row and m.max_row == row and m.min_col == start_col
+    ]
+    for m in to_remove:
+        ws.merged_cells.remove(m)
+    if last_col > start_col:
+        ws.merge_cells(start_row=row, start_column=start_col,
+                       end_row=row, end_column=last_col)
+
+
+def _expand_date_columns(ws, template_cols, needed_cols):
+    """Copy the style of the last template date column to fill in extra columns."""
+    ref_col = FIRST_DATE_COL + template_cols - 1
+    ref_hdr = ws.cell(row=HEADER_ROW, column=ref_col)
+
+    for extra in range(template_cols, needed_cols):
+        new_col = FIRST_DATE_COL + extra
+        # Header row 11
+        _copy_cell_style(ref_hdr, ws.cell(row=HEADER_ROW, column=new_col))
+        ws.column_dimensions[get_column_letter(new_col)].width = \
+            ws.column_dimensions[get_column_letter(ref_col)].width or 4.57
+        # Distribution rows 4-10
+        for r in range(4, 11):
+            _copy_cell_style(ws.cell(row=r, column=ref_col),
+                             ws.cell(row=r, column=new_col))
+        # Data rows 12+
+        for r in range(DATA_ROW_START, ws.max_row + 1):
+            _copy_cell_style(ws.cell(row=r, column=ref_col),
+                             ws.cell(row=r, column=new_col))
+
+
+def _write_distribution_block(ws, issue_keys, settings):
+    recipients   = settings.get('recipients', [])
+    saved_issues = settings.get('issues', {})
+
+    # Clear existing content + merges in I:K for rows 4-10
+    for r in range(4, 11):
+        for c in range(9, 12):          # cols I, J, K
+            ws.cell(row=r, column=c).value = None
+
+    # Remove existing I:K merges in rows 4-10
+    to_remove = [
+        m for m in list(ws.merged_cells.ranges)
+        if 4 <= m.min_row <= 10 and m.min_col >= 9 and m.max_col <= 11
+    ]
+    for m in to_remove:
+        ws.merged_cells.remove(m)
+
+    # Clear existing distribution code cells in rows 4-10 (cols L+)
+    for r in range(4, 11):
+        for c in range(FIRST_DATE_COL, ws.max_column + 1):
+            ws.cell(row=r, column=c).value = None
+
+    # Get reference style for recipient label and code cells from template row 4
+    ref_label = ws.cell(row=4, column=10)   # 'Client' cell in template (col J)
+    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)
+
+    for i, recipient in enumerate(recipients[:_MAX_RECIPIENTS]):
+        row    = 4 + i
+        r_name = recipient.get('name', '')
+
+        # Write label into I (anchor for merge I:K)
+        label_cell = ws.cell(row=row, column=9)
+        label_cell.value = r_name
+        _copy_cell_style(ref_label, label_cell)
+        label_cell.alignment = label_cell.alignment.copy()
+        try:
+            label_cell.alignment = Alignment(
+                horizontal='right', vertical=label_cell.alignment.vertical,
+                wrap_text=label_cell.alignment.wrap_text,
+                text_rotation=label_cell.alignment.text_rotation
+            )
+        except Exception:
+            pass
+        ws.merge_cells(start_row=row, start_column=9, end_row=row, end_column=11)
+
+        # Write distribution codes
+        for col_idx, (date_str, issued_by) in enumerate(issue_keys):
+            key  = '{}||{}'.format(date_str, issued_by)
+            code = saved_issues.get(key, {}).get(r_name, '')
+            dc   = FIRST_DATE_COL + col_idx
+            code_cell = ws.cell(row=row, column=dc)
+            _copy_cell_style(ref_code, code_cell)
+            code_cell.value = code
+
+
+def _write_date_headers(ws, issue_keys):
+    """Write date+issued_by text into row 11 date columns, keeping template style."""
+    for col_idx, (date_str, issued_by) in enumerate(issue_keys):
+        col  = FIRST_DATE_COL + col_idx
+        cell = ws.cell(row=HEADER_ROW, column=col)
+        hdr  = _fmt_header(date_str)
+        if issued_by:
+            hdr += '\n' + issued_by
+        cell.value = hdr
+
+
+def _write_data_rows(ws, sheets_data, issue_keys, last_col):
+    issue_idx = {key: i for i, key in enumerate(issue_keys)}
+
+    # Get style reference from template row 12 (first data row)
+    ref_cols = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, last_col + 1)}
+
+    # Clear all existing data rows content
+    for row in ws.iter_rows(min_row=DATA_ROW_START, max_row=ws.max_row):
+        for cell in row:
+            cell.value = None
+
+    current_row = DATA_ROW_START
+    prev_group  = None
+
+    for sheet in sheets_data:
+        group = sheet['sheet_type']
+
+        if prev_group is not None and group != prev_group:
+            ws.row_dimensions[current_row].height = _DATA_ROW_HEIGHT
+            current_row += 1
+
+        prev_group = group
+        ws.row_dimensions[current_row].height = _DATA_ROW_HEIGHT
+        r = current_row
+
+        # Restore styles from template row 12 reference
+        for c in range(1, last_col + 1):
+            _copy_cell_style(ref_cols.get(c, ref_cols.get(min(c, 11))),
+                             ws.cell(row=r, column=c))
+
+        values = [
+            (1,  sheet['sheet_type'],           'center'),
+            (2,  sheet['project'],              'center'),
+            (3,  sheet['originator'],           'center'),
+            (4,  sheet['functional_breakdown'], 'center'),
+            (5,  sheet['spatial_breakdown'],    'center'),
+            (6,  sheet['form'],                 'center'),
+            (7,  sheet['discipline'],           'center'),
+            (8,  sheet['number'],               'center'),
+            (9,  sheet['title'],                'left'),
+            (10, sheet['size'],                 'center'),
+            (11, sheet['scale'],                'center'),
+        ]
+
+        for col, val, _ in values:
+            ws.cell(row=r, column=col).value = val
+
+        for rev in sheet['revisions']:
+            key = (rev['date'], rev.get('issued_by', ''))
+            if key in issue_idx:
+                col = FIRST_DATE_COL + issue_idx[key]
+                ws.cell(row=r, column=col).value = rev['code']
+
+        current_row += 1
