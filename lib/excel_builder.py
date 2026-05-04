@@ -179,18 +179,18 @@ def _write_distribution_block(ws, issue_keys, settings):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
 
-    # Clear existing content + merges in I:K for rows 4-10
-    for r in range(4, 11):
-        for c in range(9, 12):          # cols I, J, K
-            ws.cell(row=r, column=c).value = None
-
-    # Remove existing I:K merges in rows 4-10
+    # Remove all merges in rows 4-10 cols I+ before touching any values
     to_remove = [
         m for m in list(ws.merged_cells.ranges)
-        if 4 <= m.min_row <= 10 and m.min_col >= 9 and m.max_col <= 11
+        if 4 <= m.min_row <= 10 and m.max_row <= 10 and m.min_col >= 9
     ]
     for m in to_remove:
         ws.merged_cells.remove(m)
+
+    # Clear existing content in I:K for rows 4-10
+    for r in range(4, 11):
+        for c in range(9, 12):
+            ws.cell(row=r, column=c).value = None
 
     # Clear existing distribution code cells in rows 4-10 (cols L+)
     for r in range(4, 11):
