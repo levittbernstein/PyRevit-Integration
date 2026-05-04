@@ -126,9 +126,27 @@ output_folder = forms.pick_folder(title='Select output folder for register files
 if not output_folder:
     sys.exit(0)
 
-proj_num  = project_info.get('project_number', 'PROJECT')
-xlsx_path = os.path.join(output_folder, '{}-LB-Issue-Register.xlsx'.format(proj_num))
-pdf_path  = os.path.join(output_folder, '{}-LB-Issue-Register.pdf'.format(proj_num))
+proj_num = project_info.get('project_number', 'PROJECT')
+
+# Date prefix: parse register_issue_date → YYMMDD_
+_reg_date = updated_settings.get('register_issue_date', '').strip()
+_date_prefix = ''
+if _reg_date:
+    import datetime as _dt
+    for _fmt in ('%d/%m/%Y', '%d/%m/%y', '%d.%m.%Y', '%d.%m.%y', '%Y-%m-%d'):
+        try:
+            _date_prefix = _dt.datetime.strptime(_reg_date, _fmt).strftime('%y%m%d') + '_'
+            break
+        except ValueError:
+            pass
+
+# Revision suffix: _P01 etc. — strip any characters unsafe for filenames
+_reg_rev = updated_settings.get('register_revision', '').strip()
+_rev_suffix = ('_' + ''.join(c for c in _reg_rev if c.isalnum())) if _reg_rev else ''
+
+_stem     = '{}{}-LB-Issue-Register{}'.format(_date_prefix, proj_num, _rev_suffix)
+xlsx_path = os.path.join(output_folder, _stem + '.xlsx')
+pdf_path  = os.path.join(output_folder, _stem + '.pdf')
 
 # ── Build Excel + PDF via CPython subprocess ──────────────────────────────────
 # Serialise all data to a temp JSON file
