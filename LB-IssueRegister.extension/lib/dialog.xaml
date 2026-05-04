@@ -1,0 +1,154 @@
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="LB Issue Register — Export Settings"
+    Width="820" Height="720"
+    MinWidth="720" MinHeight="580"
+    WindowStartupLocation="CenterScreen"
+    ResizeMode="CanResizeWithGrip"
+    Background="#F5F5F5"
+    FontFamily="Founders Grotesk Regular, Arial"
+    FontSize="12">
+
+    <Window.Resources>
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontFamily"   Value="Founders Grotesk Medium, Arial"/>
+            <Setter Property="FontSize"     Value="11"/>
+            <Setter Property="Foreground"   Value="White"/>
+            <Setter Property="Background"   Value="#000000"/>
+            <Setter Property="Padding"      Value="8,4"/>
+            <Setter Property="Margin"       Value="0,8,0,2"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin"            Value="0,0,8,0"/>
+            <Setter Property="FontSize"          Value="11"/>
+        </Style>
+        <Style x:Key="FieldBox" TargetType="TextBox">
+            <Setter Property="Height"  Value="24"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="BorderBrush" Value="#BBBBBB"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="ActionButton" TargetType="Button">
+            <Setter Property="Height"            Value="30"/>
+            <Setter Property="MinWidth"          Value="90"/>
+            <Setter Property="Padding"           Value="12,4"/>
+            <Setter Property="FontFamily"        Value="Founders Grotesk Medium, Arial"/>
+            <Setter Property="FontSize"          Value="11"/>
+            <Setter Property="Background"        Value="#000000"/>
+            <Setter Property="Foreground"        Value="White"/>
+            <Setter Property="BorderThickness"   Value="0"/>
+            <Setter Property="Cursor"            Value="Hand"/>
+        </Style>
+        <Style x:Key="CancelButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+            <Setter Property="Background"  Value="#555555"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>   <!-- Title block section -->
+            <RowDefinition Height="Auto"/>   <!-- Key -->
+            <RowDefinition Height="*"/>      <!-- Distribution matrix -->
+            <RowDefinition Height="Auto"/>   <!-- Buttons -->
+        </Grid.RowDefinitions>
+
+        <!-- ═══════════════════════════════════════════════════ -->
+        <!-- SECTION 1: Title block fields                       -->
+        <!-- ═══════════════════════════════════════════════════ -->
+        <StackPanel Grid.Row="0">
+            <TextBlock Style="{StaticResource SectionHeader}" Text="TITLE BLOCK INFORMATION"/>
+            <Grid Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="110"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="32"/>
+                    <RowDefinition Height="32"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="Subject:" Style="{StaticResource FieldLabel}"/>
+                <TextBox   Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="3"
+                           x:Name="SubjectBox" Style="{StaticResource FieldBox}"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="0" Text="Drawn by:"     Style="{StaticResource FieldLabel}"/>
+                <TextBox   Grid.Row="1" Grid.Column="1" x:Name="DrawnByBox"  Style="{StaticResource FieldBox}"/>
+
+                <TextBlock Grid.Row="1" Grid.Column="3" Text="Checked by:"    Style="{StaticResource FieldLabel}"/>
+                <TextBox   Grid.Row="1" Grid.Column="4" x:Name="CheckedByBox" Style="{StaticResource FieldBox}"/>
+            </Grid>
+        </StackPanel>
+
+        <!-- ═══════════════════════════════════════════════════ -->
+        <!-- SECTION 2: Key                                      -->
+        <!-- ═══════════════════════════════════════════════════ -->
+        <StackPanel Grid.Row="1" Margin="0,4,0,0">
+            <TextBlock Style="{StaticResource SectionHeader}" Text="KEY"/>
+            <TextBlock Margin="0,4,0,0" FontSize="10" TextWrapping="Wrap" Foreground="#444444"
+                Text="Revisions: Pxx Preliminary   Cxx Contractual     Distribution: E Email   U CDE upload   T Newforma   X Issue slip only     Format: Controlled in black (pdf, ifc, nwc/d)   Uncontrolled in red (dwg, rvt)     Status: S1 Coordination   S2 Information   S3 Review &amp; comment   S4 Approval by lead appointing party   S5 Approval by appointing party   A Approved/Contractual   B Partial sign off"/>
+        </StackPanel>
+
+        <!-- ═══════════════════════════════════════════════════ -->
+        <!-- SECTION 3: Distribution matrix                      -->
+        <!-- ═══════════════════════════════════════════════════ -->
+        <StackPanel Grid.Row="2">
+            <TextBlock Style="{StaticResource SectionHeader}" Text="DISTRIBUTION — enter format code (E / U / T / X) for each issue"/>
+            <Grid Margin="0,4,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="170"/>   <!-- Recipient name -->
+                    <ColumnDefinition Width="*"/>     <!-- Issue columns scrollable -->
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: static recipient labels -->
+                <ItemsControl x:Name="RecipientLabels" Grid.Column="0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                     Height="26" Margin="0,1" Padding="4,2"
+                                     BorderBrush="#CCCCCC" BorderThickness="1"
+                                     VerticalContentAlignment="Center"
+                                     FontSize="11"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <!-- Right: scrollable grid of issue code cells -->
+                <ScrollViewer Grid.Column="1" HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled">
+                    <ItemsControl x:Name="DistributionGrid">
+                        <!-- Populated dynamically in code-behind -->
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- Add / remove recipient buttons -->
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <Button Content="+ Add recipient" Click="OnAddRecipient"
+                        Height="24" Padding="10,2" Margin="0,0,8,0"
+                        Background="#444" Foreground="White" BorderThickness="0"
+                        FontSize="10" Cursor="Hand"/>
+                <Button Content="− Remove last" Click="OnRemoveRecipient"
+                        Height="24" Padding="10,2"
+                        Background="#444" Foreground="White" BorderThickness="0"
+                        FontSize="10" Cursor="Hand"/>
+            </StackPanel>
+        </StackPanel>
+
+        <!-- ═══════════════════════════════════════════════════ -->
+        <!-- SECTION 4: Buttons                                  -->
+        <!-- ═══════════════════════════════════════════════════ -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal"
+                    HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Cancel" Click="OnCancel"
+                    Style="{StaticResource CancelButton}" Margin="0,0,8,0"/>
+            <Button Content="Export Register" Click="OnExport"
+                    Style="{StaticResource ActionButton}"/>
+        </StackPanel>
+    </Grid>
+</Window>
