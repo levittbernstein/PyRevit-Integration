@@ -298,9 +298,11 @@ def get_sheets_data(doc):
             rev_elem = doc.GetElement(rev_id)
             if rev_elem is None:
                 continue
+            date_str = _normalise_date(rev_elem.RevisionDate)
+            if not date_str:
+                continue  # skip revisions with no date — they produce a spurious column
             per_sheet_idx += 1
             code = _revision_code(doc, sheet, rev_elem, per_sheet_idx)
-            date_str = _normalise_date(rev_elem.RevisionDate)
             try:
                 _rid = rev_id.IntegerValue
             except AttributeError:
@@ -351,6 +353,8 @@ def collect_issue_dates(sheets_data):
     seen = OrderedDict()
     for sheet in sheets_data:
         for rev in sheet['revisions']:
+            if not rev['date']:
+                continue  # already filtered in get_sheets_data, but guard here too
             key = (rev['date'], rev['issued_by'])
             if key not in seen:
                 seen[key] = rev['date']
