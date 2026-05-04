@@ -85,7 +85,6 @@ dlg = ExportDialog(issue_keys, settings)
 confirmed, updated_settings = dlg.show()
 
 if not confirmed:
-    output.print_md('Export cancelled.')
     sys.exit(0)
 
 # ── Save settings back to model ───────────────────────────────────────────────
@@ -98,12 +97,10 @@ with Transaction(doc, 'LB Issue Register — save settings') as t:
         t.Commit()
     except Exception:
         t.RollBack()
-        output.print_md('Warning: could not save settings to model (continuing anyway).')
 
 # ── Choose output folder ──────────────────────────────────────────────────────
 output_folder = forms.pick_folder(title='Select output folder for register files')
 if not output_folder:
-    output.print_md('No folder selected — export cancelled.')
     sys.exit(0)
 
 proj_num  = project_info.get('project_number', 'PROJECT')
