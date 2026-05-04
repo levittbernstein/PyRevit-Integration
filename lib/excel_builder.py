@@ -88,10 +88,10 @@ def _apply_snapshot(cell, snap):
     """Apply a style snapshot captured by _snapshot_style."""
     if snap is None:
         return
-    cell.font          = snap['font'].copy()
-    cell.fill          = snap['fill'].copy()
-    cell.border        = snap['border'].copy()
-    cell.alignment     = snap['alignment'].copy()
+    cell.font          = snap['font']
+    cell.fill          = snap['fill']
+    cell.border        = snap['border']
+    cell.alignment     = snap['alignment']
     cell.number_format = snap['number_format']
 
 
