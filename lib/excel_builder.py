@@ -24,10 +24,12 @@ _HEADER_FILL = PatternFill(patternType='solid',
 
 _TEMPLATE = os.path.join(os.path.dirname(__file__), 'template.xltx')
 
-# ── Layout constants (must match template) ───────────────────────────────────
-HEADER_ROW     = 11
-DATA_ROW_START = 12
+# ── Layout constants (describe the template; effective values are computed at runtime) ──
+HEADER_ROW     = 11   # row of column-label headers in the template
+DATA_ROW_START = 12   # first data row in the template
 FIRST_DATE_COL = 12   # column L
+_DIST_FIRST_ROW = 4   # first distribution (recipient) row
+_DIST_TMPL_ROWS = 7   # number of distribution rows pre-formatted in the template
 
 _HEADER_LABELS = [
     'Drawing Package', 'Project', 'Originator',
@@ -36,7 +38,6 @@ _HEADER_LABELS = [
 ]
 
 _DATA_ROW_HEIGHT = 21.6
-_MAX_RECIPIENTS  = 7
 
 
 # ── Date helpers ──────────────────────────────────────────────────────────────
@@ -122,21 +123,43 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     n_dates  = len(issue_keys)
     last_col = FIRST_DATE_COL + n_dates - 1
 
-    # Snapshot date-column styles BEFORE any modifications so they survive
-    # the unmerge/clear cycle that replaces cell objects in ws._cells.
-    _date_data_snap   = _snapshot_style(ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL))
-    _date_hdr_snap    = _snapshot_style(ws.cell(row=HEADER_ROW,     column=FIRST_DATE_COL))
-    _date_r3_snap     = _snapshot_style(ws.cell(row=3,              column=FIRST_DATE_COL))
-    _date_col_width   = ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57
+    # ── Compute effective row layout ──────────────────────────────────────
+    # Distribution block occupies rows 4 .. (eff_header_row - 1).
+    # The template has 7 pre-formatted distribution rows (rows 4-10).
+    # If more recipients exist, insert extra rows to expand the block.
+    n_recipients    = len(settings.get('recipients', []))
+    extra_dist_rows = max(0, n_recipients - _DIST_TMPL_ROWS)
+    eff_header_row  = HEADER_ROW + extra_dist_rows
+    eff_data_start  = DATA_ROW_START + extra_dist_rows
+
+    # Snapshot styles from TEMPLATE rows BEFORE any modification/insertion.
+    _date_data_snap = _snapshot_style(ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL))
+    _date_hdr_snap  = _snapshot_style(ws.cell(row=HEADER_ROW,     column=FIRST_DATE_COL))
+    _date_r3_snap   = _snapshot_style(ws.cell(row=3,              column=FIRST_DATE_COL))
+    _date_col_width = ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57
+    # Also snapshot the last template distribution row for style propagation
+    _dist_row_snap  = _snapshot_style(ws.cell(row=HEADER_ROW - 1, column=FIRST_DATE_COL))
 
     # How many date columns are already in the template?
     template_date_cols = ws.max_column - (FIRST_DATE_COL - 1)
 
-    # ── Expand date columns if we need more than the template provides ─────
-    if n_dates > template_date_cols:
-        _expand_date_columns(ws, template_date_cols, n_dates)
+    # ── Insert extra distribution rows before the header row ─────────────
+    if extra_dist_rows > 0:
+        ws.insert_rows(HEADER_ROW, extra_dist_rows)
+        last_tmpl_dist = HEADER_ROW - 1  # row 10 — unchanged after insert_rows above
+        for new_r in range(HEADER_ROW, eff_header_row):
+            ws.row_dimensions[new_r].height = (
+                ws.row_dimensions[last_tmpl_dist].height or 15)
+            for c in range(1, FIRST_DATE_COL + template_date_cols):
+                _copy_cell_style(ws.cell(row=last_tmpl_dist, column=c),
+                                 ws.cell(row=new_r, column=c))
 
-    # ── Set ALL date column widths to a consistent value ──────────────────
+    # ── Expand date columns if we need more than the template provides ────
+    if n_dates > template_date_cols:
+        _expand_date_columns(ws, template_date_cols, n_dates,
+                             eff_header_row, eff_data_start)
+
+    # ── Set ALL date column widths to a consistent value ─────────────────
     for _ci in range(n_dates):
         ws.column_dimensions[get_column_letter(FIRST_DATE_COL + _ci)].width = _date_col_width
 
@@ -157,43 +180,43 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _lbl.value     = 'Issue date & revision'
     _lbl.alignment = Alignment(horizontal='right', vertical='center', wrap_text=False)
 
-    # Row 3 date cells: only the first column shows the placeholder; the rest are blank.
+    # Row 3 date cells: first column shows date+Pxx (left, no wrap); rest blank.
     for _ci, (_ds, _) in enumerate(issue_keys):
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _apply_snapshot(_c, _date_r3_snap)
         if _ci == 0:
             _c.value     = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
-            _c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+            _c.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
         else:
             _c.value = None
 
-    # ── Rows 4-10: distribution block ─────────────────────────────────────
-    _write_distribution_block(ws, issue_keys, settings)
+    # ── Distribution block ────────────────────────────────────────────────
+    _write_distribution_block(ws, issue_keys, settings, eff_header_row)
 
-    # ── Row 11: date column headers ───────────────────────────────────────
-    _write_date_headers(ws, issue_keys, _date_hdr_snap)
+    # ── Column-label header row ───────────────────────────────────────────
+    _write_date_headers(ws, issue_keys, _date_hdr_snap, eff_header_row)
 
-    # ── Rows 12+: drawing data ────────────────────────────────────────────
-    last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col, _date_data_snap)
+    # ── Drawing data rows ─────────────────────────────────────────────────
+    last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
+                                     _date_data_snap, eff_data_start)
 
-    # ── Fix merge for row 1 and 2 to cover all columns ────────────────────
+    # ── Fix merge for rows 1 and 2 to cover all columns ──────────────────
     _remerge_row(ws, 1, last_col)
     _remerge_row(ws, 2, last_col)
-    # Row 3 date cells are intentionally left unmerged (per-column values)
 
     # ── Auto-size Document Title (col 9) and Scale (col 11) ──────────────
     for _cn, _cl in ((9, 'I'), (11, 'K')):
         _w = max(
             (len(str(ws.cell(row=_r, column=_cn).value or ''))
-             for _r in range(DATA_ROW_START, last_data_row + 1)),
+             for _r in range(eff_data_start, last_data_row + 1)),
             default=8
         )
         ws.column_dimensions[_cl].width = _w + 3
 
     # ── Freeze panes ──────────────────────────────────────────────────────
-    ws.freeze_panes = ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL)
+    ws.freeze_panes = ws.cell(row=eff_data_start, column=FIRST_DATE_COL)
 
-    # ── Print area: stop at the last written data row ─────────────────────
+    # ── Print area ────────────────────────────────────────────────────────
     ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
 
     wb.template = False
@@ -225,93 +248,91 @@ def _remerge_row(ws, row, last_col, start_col=1):
                        end_row=row, end_column=last_col)
 
 
-def _expand_date_columns(ws, template_cols, needed_cols):
+def _expand_date_columns(ws, template_cols, needed_cols, header_row, data_start):
     """Copy the style of the last template date column to fill in extra columns."""
     ref_col = FIRST_DATE_COL + template_cols - 1
-    ref_hdr = ws.cell(row=HEADER_ROW, column=ref_col)
+    ref_hdr = ws.cell(row=header_row, column=ref_col)
 
     for extra in range(template_cols, needed_cols):
         new_col = FIRST_DATE_COL + extra
-        # Header row 11
-        _copy_cell_style(ref_hdr, ws.cell(row=HEADER_ROW, column=new_col))
+        # Header row
+        _copy_cell_style(ref_hdr, ws.cell(row=header_row, column=new_col))
         ws.column_dimensions[get_column_letter(new_col)].width = \
             ws.column_dimensions[get_column_letter(ref_col)].width or 4.57
-        # Distribution rows 4-10
-        for r in range(4, 11):
+        # Distribution rows
+        for r in range(_DIST_FIRST_ROW, header_row):
             _copy_cell_style(ws.cell(row=r, column=ref_col),
                              ws.cell(row=r, column=new_col))
-        # Data rows 12+
-        for r in range(DATA_ROW_START, ws.max_row + 1):
+        # Data rows
+        for r in range(data_start, ws.max_row + 1):
             _copy_cell_style(ws.cell(row=r, column=ref_col),
                              ws.cell(row=r, column=new_col))
 
 
-def _write_distribution_block(ws, issue_keys, settings):
+def _write_distribution_block(ws, issue_keys, settings, header_row):
     recipients   = settings.get('recipients', [])
     saved_issues = settings.get('issues', {})
+    dist_last    = header_row - 1   # last distribution row (inclusive)
 
-    # Capture font/border/alignment refs BEFORE unmerge flushes the cell cache.
-    ref_label = ws.cell(row=4, column=10)          # J4 'Client'
-    ref_code  = ws.cell(row=4, column=FIRST_DATE_COL)  # L4 date column
+    # Capture style refs BEFORE unmerge flushes the cell cache.
+    ref_label = ws.cell(row=_DIST_FIRST_ROW, column=10)
+    ref_code  = ws.cell(row=_DIST_FIRST_ROW, column=FIRST_DATE_COL)
 
-    # Unmerge everything in rows 4-10 cols I+ and flush stale MergedCell cache
-    _unmerge_region(ws, 4, 10, 9, ws.max_column)
-
-    # Paint ALL cells in rows 4-10 cols I+ with the header dark fill first,
-    # then overwrite content. Using _HEADER_FILL directly (not a theme-copy)
-    # because openpyxl can't reliably round-trip theme-colored fills via copy().
-    for r in range(4, 11):
+    # Unmerge and clear all distribution rows
+    _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 9, ws.max_column)
+    for r in range(_DIST_FIRST_ROW, header_row):
         for c in range(9, ws.max_column + 1):
             cell = ws.cell(row=r, column=c)
             cell.fill  = _HEADER_FILL
             cell.value = None
 
-    for i, recipient in enumerate(recipients[:_MAX_RECIPIENTS]):
-        row    = 4 + i
+    for i, recipient in enumerate(recipients):
+        row    = _DIST_FIRST_ROW + i
+        if row > dist_last:
+            break   # safety guard — should not happen after row insertion
         r_name = recipient.get('name', '')
 
-        # Write label into I (anchor for merge I:K)
         label_cell = ws.cell(row=row, column=9)
         label_cell.value = r_name
         _copy_cell_style(ref_label, label_cell)
-        label_cell.fill = _HEADER_FILL   # override fill explicitly
+        label_cell.fill      = _HEADER_FILL
         label_cell.alignment = Alignment(horizontal='right', vertical='center')
         ws.merge_cells(start_row=row, start_column=9, end_row=row, end_column=11)
 
-        # Write distribution codes
         for col_idx, (date_str, issued_by) in enumerate(issue_keys):
             key  = '{}||{}'.format(date_str, issued_by)
             code = saved_issues.get(key, {}).get(r_name, '')
             dc   = FIRST_DATE_COL + col_idx
             code_cell = ws.cell(row=row, column=dc)
             _copy_cell_style(ref_code, code_cell)
-            code_cell.fill  = _HEADER_FILL   # override fill explicitly
+            code_cell.fill  = _HEADER_FILL
             code_cell.value = code
 
 
-def _write_date_headers(ws, issue_keys, date_snap=None):
-    """Write date into row 11 date columns, rotated 90°."""
+def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
+    """Write date into the header row date columns, rotated 90°."""
     for col_idx, (date_str, _issued_by) in enumerate(issue_keys):
         col  = FIRST_DATE_COL + col_idx
-        cell = ws.cell(row=HEADER_ROW, column=col)
+        cell = ws.cell(row=header_row, column=col)
         _apply_snapshot(cell, date_snap)
         cell.value     = _fmt_header(date_str)
         cell.alignment = Alignment(text_rotation=90, horizontal='center', vertical='bottom')
 
 
-def _write_data_rows(ws, sheets_data, issue_keys, last_col, date_snap=None):
+def _write_data_rows(ws, sheets_data, issue_keys, last_col,
+                     date_snap=None, data_start=DATA_ROW_START):
     issue_idx = {key: i for i, key in enumerate(issue_keys)}
 
-    # Capture non-date column styles from template row 12 before unmerge/clear.
-    ref_cols = {c: ws.cell(row=DATA_ROW_START, column=c) for c in range(1, FIRST_DATE_COL)}
+    # Capture non-date column styles from template data row before unmerge/clear.
+    ref_cols = {c: ws.cell(row=data_start, column=c) for c in range(1, FIRST_DATE_COL)}
 
     # Unmerge and clear all data rows
-    _unmerge_region(ws, DATA_ROW_START, ws.max_row, 1, ws.max_column)
-    for row in ws.iter_rows(min_row=DATA_ROW_START, max_row=ws.max_row):
+    _unmerge_region(ws, data_start, ws.max_row, 1, ws.max_column)
+    for row in ws.iter_rows(min_row=data_start, max_row=ws.max_row):
         for cell in row:
             cell.value = None
 
-    current_row = DATA_ROW_START
+    current_row = data_start
     prev_group  = None
 
     for sheet in sheets_data:
