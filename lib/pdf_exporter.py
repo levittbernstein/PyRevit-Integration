@@ -121,6 +121,11 @@ def _export_via_excel_com(excel_path, pdf_path):
             tmpl_wb = None
             out_wb.Save()
 
+        # ── Fit to single page ────────────────────────────────────────────────
+        out_ws.PageSetup.Zoom          = False
+        out_ws.PageSetup.FitToPagesTall = 1
+        out_ws.PageSetup.FitToPagesWide = 1
+
         # ── Export PDF ────────────────────────────────────────────────────────
         excel.Interactive = True
         out_ws.ExportAsFixedFormat(

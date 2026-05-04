@@ -273,18 +273,35 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Print area ────────────────────────────────────────────────────────
     ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
 
-    # ── Logo at K1 ───────────────────────────────────────────────────────
-    # Clear any image auto-loaded from the template, then place lb_logo.png
-    # at K1 scaled to fit the header row (preserving the 753:56 aspect ratio).
+    # ── Fit everything onto a single page when printing / exporting PDF ───
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    ws.page_setup.fitToWidth  = 1
+    ws.page_setup.fitToHeight = 1
+
+    # ── Logo: right-aligned to end just before col L ──────────────────────
+    # Col I and col K are auto-sized above, so read their widths here.
+    # Excel pixel formula: px = round((char_width + 0.71) × 7 + 5)
     ws._images.clear()
     if os.path.exists(_LOGO):
-        _logo_h_px       = 24
-        _logo_w_px       = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
+        def _col_px(letter):
+            w = ws.column_dimensions[letter].width or 8
+            return round((w + 0.71) * 7 + 5)
+
+        _ci_px = _col_px('I')
+        _cj_px = _col_px('J')
+        _ck_px = _col_px('K')
+
+        _logo_h_px = 20
+        _logo_w_px = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
+
+        # Right-align: start the logo so its right edge is 4px before col L
+        _col_off_px = _ci_px + _cj_px + _ck_px - _logo_w_px - 4
         _logo_img        = XLImage(_LOGO)
         _logo_img.height = _logo_h_px
         _logo_img.width  = _logo_w_px
-        # col=9 → column J (0-indexed); rowOff=76200 EMU ≈ 6pt down from top of row 1
-        _marker          = AnchorMarker(col=9, colOff=0, row=0, rowOff=76200)
+        # Anchor at col I (col=8, 0-indexed); rowOff ≈ 8pt down from top of row 1
+        _marker          = AnchorMarker(col=8, colOff=max(0, _col_off_px) * 9525,
+                                        row=0, rowOff=101600)
         _size            = XDRPositiveSize2D(cx=_logo_w_px * 9525, cy=_logo_h_px * 9525)
         _logo_img.anchor = OneCellAnchor(_from=_marker, ext=_size)
         ws.add_image(_logo_img)
