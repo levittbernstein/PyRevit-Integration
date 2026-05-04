@@ -11,12 +11,16 @@ We load the template, clear/overwrite content, and save.
 """
 
 import os
+import zipfile
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from io import BytesIO
 
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image as XLImage
 
 # Header dark fill (theme 0 / dark1 = black, tint -0.15 → near-black matching LB template)
 _HEADER_FILL = PatternFill(patternType='solid',
@@ -114,6 +118,66 @@ def _unmerge_region(ws, min_row, max_row, min_col, max_col):
         for r in range(m.min_row, m.max_row + 1):
             for c in range(m.min_col, m.max_col + 1):
                 ws._cells.pop((r, c), None)
+
+
+# ── Template image restoration ────────────────────────────────────────────────
+
+def _restore_template_images(ws, template_path):
+    """Re-add images from the template that openpyxl loses during load/save of .xltx.
+
+    Reads the drawing XML and relationship file directly from the ZIP archive so
+    the images are added at their original anchor positions regardless of what
+    openpyxl did (or didn't) preserve internally.
+    """
+    _XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
+    _A   = 'http://schemas.openxmlformats.org/drawingml/2006/main'
+    _R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+    try:
+        with zipfile.ZipFile(template_path, 'r') as zf:
+            names = set(zf.namelist())
+            drawing_xml  = 'xl/drawings/drawing1.xml'
+            drawing_rels = 'xl/drawings/_rels/drawing1.xml.rels'
+            if drawing_xml not in names:
+                return
+
+            # Map rId → xl/media/<filename>
+            rid_to_img = {}
+            if drawing_rels in names:
+                for rel in ET.fromstring(zf.read(drawing_rels)):
+                    rid = rel.get('Id', '')
+                    tgt = rel.get('Target', '')
+                    if 'media/' in tgt:
+                        rid_to_img[rid] = 'xl/media/' + tgt.split('/')[-1]
+
+            draw_root = ET.fromstring(zf.read(drawing_xml))
+
+            for tag in ('twoCellAnchor', 'oneCellAnchor'):
+                for anchor in draw_root.findall('{%s}%s' % (_XDR, tag)):
+                    frm = anchor.find('{%s}from' % _XDR)
+                    if frm is None:
+                        continue
+                    col_el = frm.find('{%s}col' % _XDR)
+                    row_el = frm.find('{%s}row' % _XDR)
+                    if col_el is None or row_el is None:
+                        continue
+
+                    blip = anchor.find('.//{%s}blip' % _A)
+                    if blip is None:
+                        continue
+                    rid = blip.get('{%s}embed' % _R, '')
+                    img_path = rid_to_img.get(rid)
+                    if not img_path or img_path not in names:
+                        continue
+
+                    img = XLImage(BytesIO(zf.read(img_path)))
+                    # Anchor uses 0-indexed col/row; openpyxl cell refs are 1-indexed
+                    img.anchor = '{}{}'.format(
+                        get_column_letter(int(col_el.text) + 1),
+                        int(row_el.text) + 1,
+                    )
+                    ws.add_image(img)
+    except Exception:
+        pass
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -236,10 +300,12 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
                                      _date_data_snap, eff_data_start)
 
-    # ── Fix merge for rows 1 and 2 to cover all columns ──────────────────
-    # Snapshot row 1 style before remerge destroys the anchor cell (losing font colour etc.)
+    # ── Fix merge for rows 1 and 2 to cover the fixed columns ───────────
+    # Row 1 merge stops at col K (FIRST_DATE_COL - 1) so the template logo
+    # that lives in the right-hand portion of row 1 is not wiped.
+    # Row 2 ("DELIVERABLES LIST & ISSUE SHEET") spans the full sheet width.
     _row1_snap = _snapshot_style(ws.cell(row=1, column=1))
-    _remerge_row(ws, 1, last_col)
+    _remerge_row(ws, 1, FIRST_DATE_COL - 1)
     _remerge_row(ws, 2, last_col)
     _r1 = ws.cell(row=1, column=1)
     _apply_snapshot(_r1, _row1_snap)
@@ -259,6 +325,11 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
 
     # ── Print area ────────────────────────────────────────────────────────
     ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
+
+    # ── Restore template images (logo etc.) ──────────────────────────────
+    # openpyxl does not reliably preserve images from .xltx through load/save;
+    # re-extract and re-add them from the template ZIP as the final step.
+    _restore_template_images(ws, _TEMPLATE)
 
     wb.template = False
     wb.save(output_path)
