@@ -11,6 +11,7 @@ Fallback: Revit Extensible Storage
 """
 
 import os
+import io
 import json
 import copy
 
@@ -47,7 +48,7 @@ def _load_sidecar(doc):
     if not path or not os.path.exists(path):
         return None
     try:
-        with open(path, 'r', encoding='utf-8') as fh:
+        with io.open(path, 'r', encoding='utf-8') as fh:
             return json.loads(fh.read())
     except Exception as exc:
         print('LB Issue Register — could not read sidecar: {}'.format(exc))
@@ -59,7 +60,7 @@ def _save_sidecar(doc, settings):
     if not path:
         return
     try:
-        with open(path, 'w', encoding='utf-8') as fh:
+        with io.open(path, 'w', encoding='utf-8') as fh:
             fh.write(json.dumps(settings, ensure_ascii=False, indent=2))
     except Exception as exc:
         print('LB Issue Register — could not write sidecar: {}'.format(exc))

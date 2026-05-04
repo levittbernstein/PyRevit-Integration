@@ -5,6 +5,7 @@ Runs under IronPython inside Revit.
 """
 
 import os
+import io
 
 import clr
 import System
@@ -27,7 +28,7 @@ import System.Windows.Markup as Markup
 
 
 def _load_xaml(path):
-    with open(path, 'r', encoding='utf-8') as fh:
+    with io.open(path, 'r', encoding='utf-8') as fh:
         return Markup.XamlReader.Parse(fh.read())
 
 
