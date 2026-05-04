@@ -131,6 +131,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Print area ────────────────────────────────────────────────────────
     ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), ws.max_row)
 
+    wb.template = False
     wb.save(output_path)
     return output_path
 
