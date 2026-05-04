@@ -30,17 +30,29 @@ from dialog       import ExportDialog
 # ── Find CPython ──────────────────────────────────────────────────────────────
 def _find_cpython():
     appdata = os.environ.get('APPDATA', '')
-    candidate = os.path.join(
-        appdata, 'pyRevit-Master', 'bin', 'cengines', 'CPY3123', 'python.exe')
-    if os.path.exists(candidate):
-        return candidate
+    search_roots = ['pyRevit-Master', 'pyRevit']
+    engine_name  = 'CPY3123'
+    for root in search_roots:
+        candidate = os.path.join(
+            appdata, root, 'bin', 'cengines', engine_name, 'python.exe')
+        if os.path.exists(candidate):
+            return candidate
+    # Fallback: glob for any CPY* engine in either root
+    import glob
+    for root in search_roots:
+        pattern = os.path.join(appdata, root, 'bin', 'cengines', 'CPY*', 'python.exe')
+        hits = glob.glob(pattern)
+        if hits:
+            return hits[0]
     return None
 
 _cpython = _find_cpython()
 if not _cpython:
     forms.alert(
-        'Cannot find pyRevit CPython at:\n'
-        '%APPDATA%\\pyRevit-Master\\bin\\cengines\\CPY3123\\python.exe\n\n'
+        'Cannot find pyRevit CPython.\n\n'
+        'Expected at:\n'
+        '  %APPDATA%\\pyRevit-Master\\bin\\cengines\\CPY3123\\python.exe\n'
+        '  %APPDATA%\\pyRevit\\bin\\cengines\\CPY3123\\python.exe\n\n'
         'Check your pyRevit installation.',
         title='CPython not found', warn_icon=True)
     sys.exit(0)
