@@ -11,10 +11,7 @@ We load the template, clear/overwrite content, and save.
 """
 
 import os
-import zipfile
-import xml.etree.ElementTree as ET
 from datetime import datetime
-from io import BytesIO
 
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -27,6 +24,7 @@ _HEADER_FILL = PatternFill(patternType='solid',
                            fgColor=Color(theme=0, tint=-0.14999847407452621))
 
 _TEMPLATE = os.path.join(os.path.dirname(__file__), 'template.xltx')
+_LOGO     = os.path.join(os.path.dirname(__file__), 'lb_logo.png')
 
 # ── Layout constants (describe the template; effective values are computed at runtime) ──
 HEADER_ROW      = 11  # row of column-label headers in the template
@@ -120,81 +118,6 @@ def _unmerge_region(ws, min_row, max_row, min_col, max_col):
                 ws._cells.pop((r, c), None)
 
 
-# ── Template image restoration ────────────────────────────────────────────────
-
-def _restore_template_images(ws, template_path):
-    """Ensure template images (logo etc.) are present in ws._images.
-
-    openpyxl usually loads images from .xltx automatically, which is the
-    preferred path — it needs no Pillow.  This function is the fallback for
-    environments where the auto-load didn't happen: it reads the drawing XML
-    and embeds each image from the ZIP using XLImage (requires Pillow).
-    Call only when ws._images is empty.
-    """
-    import tempfile as _tempfile
-    _XDR = 'http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing'
-    _A   = 'http://schemas.openxmlformats.org/drawingml/2006/main'
-    _R   = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
-    try:
-        with zipfile.ZipFile(template_path, 'r') as zf:
-            names = set(zf.namelist())
-            drawing_xml  = 'xl/drawings/drawing1.xml'
-            drawing_rels = 'xl/drawings/_rels/drawing1.xml.rels'
-            if drawing_xml not in names:
-                return
-
-            rid_to_img = {}
-            if drawing_rels in names:
-                for rel in ET.fromstring(zf.read(drawing_rels)):
-                    rid = rel.get('Id', '')
-                    tgt = rel.get('Target', '')
-                    if 'media/' in tgt:
-                        rid_to_img[rid] = 'xl/media/' + tgt.split('/')[-1]
-
-            draw_root = ET.fromstring(zf.read(drawing_xml))
-
-            for tag in ('twoCellAnchor', 'oneCellAnchor'):
-                for anchor in draw_root.findall('{%s}%s' % (_XDR, tag)):
-                    frm = anchor.find('{%s}from' % _XDR)
-                    if frm is None:
-                        continue
-                    col_el = frm.find('{%s}col' % _XDR)
-                    row_el = frm.find('{%s}row' % _XDR)
-                    if col_el is None or row_el is None:
-                        continue
-
-                    blip = anchor.find('.//{%s}blip' % _A)
-                    if blip is None:
-                        continue
-                    rid = blip.get('{%s}embed' % _R, '')
-                    img_path = rid_to_img.get(rid)
-                    if not img_path or img_path not in names:
-                        continue
-
-                    # Write to a temp file so XLImage can read dimensions without
-                    # relying on BytesIO seek behaviour across openpyxl versions.
-                    suffix = '.' + img_path.rsplit('.', 1)[-1]
-                    fd, tmp = _tempfile.mkstemp(suffix=suffix)
-                    try:
-                        os.write(fd, zf.read(img_path))
-                        os.close(fd)
-                        img = XLImage(tmp)
-                        img.anchor = '{}{}'.format(
-                            get_column_letter(int(col_el.text) + 1),
-                            int(row_el.text) + 1,
-                        )
-                        ws.add_image(img)
-                    except Exception:
-                        try:
-                            os.close(fd)
-                        except Exception:
-                            pass
-                        try:
-                            os.unlink(tmp)
-                        except Exception:
-                            pass
-    except Exception:
-        pass
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -346,16 +269,21 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     ws.freeze_panes = ws.cell(row=eff_data_start, column=FIRST_DATE_COL)
 
     # ── Print area ────────────────────────────────────────────────────────
-    # Extend at least to col AI (35) so the logo in the top-right is included.
-    _print_right = max(last_col, 35)
-    ws.print_area = 'A1:{}{}'.format(get_column_letter(_print_right), last_data_row)
+    ws.print_area = 'A1:{}{}'.format(get_column_letter(last_col), last_data_row)
 
-    # ── Restore template images (logo etc.) ──────────────────────────────
-    # openpyxl usually auto-loads images when the workbook is opened; if it
-    # did, use them as-is (no Pillow required).  Only fall back to ZIP
-    # extraction when the auto-load produced nothing.
-    if len(ws._images) == 0:
-        _restore_template_images(ws, _TEMPLATE)
+    # ── Logo at K1 ───────────────────────────────────────────────────────
+    # Clear any image auto-loaded from the template, then place lb_logo.png
+    # at K1 scaled to fit the header row (preserving the 753:56 aspect ratio).
+    ws._images.clear()
+    if os.path.exists(_LOGO):
+        try:
+            _logo_img         = XLImage(_LOGO)
+            _logo_img.height  = 24          # pts-friendly size for a ~25pt row
+            _logo_img.width   = round(753 / 56 * 24)  # maintain aspect ratio
+            _logo_img.anchor  = 'K1'
+            ws.add_image(_logo_img)
+        except Exception:
+            pass
 
     wb.template = False
     wb.save(output_path)
