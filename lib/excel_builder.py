@@ -208,11 +208,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _c = ws.cell(row=3, column=FIRST_DATE_COL + _ci)
         _apply_snapshot(_c, _date_r3_snap)
         if _ci == 0:
-            if _reg_date or _reg_rev:
-                _val = ' | '.join(x for x in [_reg_date, _reg_rev] if x)
-            else:
-                _val = '{} | P{:02d}'.format(_fmt_title(_ds), _ci + 1)
-            _c.value     = _val
+            _val = ' | '.join(x for x in [_reg_date, _reg_rev] if x)
+            _c.value     = _val if _val else None
             _c.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
         else:
             _c.value = None
