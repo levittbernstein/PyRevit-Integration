@@ -232,32 +232,47 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
                    for c in range(1, last_col + 1)}
 
     _unmerge_region(ws, eff_header_row, eff_data_start - 1, 1, last_col)
-    _hdr_bottom_sides = {}  # col → Side: yellow bottom border to move to row 15
     for _mc in range(1, last_col + 1):
         ws.merge_cells(start_row=eff_header_row, start_column=_mc,
                        end_row=eff_data_start - 1, end_column=_mc)
         _anchor = ws.cell(row=eff_header_row, column=_mc)
         _apply_snapshot(_anchor, _hdr_snaps[_mc])
         _anchor.value = _hdr_values[_mc]
-        # Strip the bottom border from the anchor (row 11) — openpyxl renders it
-        # at the physical base of row 11, not at the base of the merge.  We will
-        # place it explicitly on the last padding row (eff_data_start - 1) below.
-        if _anchor.has_style and _anchor.border.bottom.style:
-            _hdr_bottom_sides[_mc] = _anchor.border.bottom
-            _b = _anchor.border
-            _anchor.border = Border(top=_b.top, left=_b.left, right=_b.right)
 
-    # ── Clear all borders from interior padding rows (rows 12–15) ────────
-    # Prevents yellow lines from template date columns beyond last_col that
-    # were copied into the padding rows showing through the merged area.
+    # ── Clear borders on all interior padding rows (rows 12–15) ──────────
     for _ir in range(eff_header_row + 1, eff_data_start):
         for _ic in range(1, ws.max_column + 1):
             if (_ir, _ic) in ws._cells:
                 ws.cell(row=_ir, column=_ic).border = Border()
 
-    # ── Restore yellow bottom border on last padding row (row 15) ─────────
-    for _mc, _side in _hdr_bottom_sides.items():
-        ws.cell(row=eff_data_start - 1, column=_mc).border = Border(bottom=_side)
+    # ── Fix yellow border position — full workbook width ─────────────────
+    # The template bakes the yellow bottom border into left-column cells at
+    # eff_header_row (row 11).  We want it only at eff_data_start-1 (row 15).
+    # Strategy: capture the Side style, strip from row 11, stamp onto row 15.
+    _yellow_side = None
+    for _ic in range(1, ws.max_column + 1):
+        _ck = (eff_header_row, _ic)
+        if _ck in ws._cells and ws._cells[_ck].has_style:
+            _bs = ws._cells[_ck].border.bottom
+            if _bs and _bs.style:
+                _yellow_side = _bs
+                break
+
+    # Strip bottom border from every cell in row 11 across full width
+    for _ic in range(1, ws.max_column + 1):
+        if (eff_header_row, _ic) in ws._cells:
+            _c = ws.cell(row=eff_header_row, column=_ic)
+            if _c.has_style and _c.border.bottom.style:
+                _b = _c.border
+                _c.border = Border(top=_b.top, left=_b.left, right=_b.right)
+
+    # Stamp yellow bottom border onto row 15 across full width
+    if _yellow_side is not None:
+        for _ic in range(1, ws.max_column + 1):
+            _c = ws.cell(row=eff_data_start - 1, column=_ic)
+            _b = _c.border if _c.has_style else Border()
+            _c.border = Border(top=_b.top, left=_b.left, right=_b.right,
+                               bottom=_yellow_side)
 
     # ── Drawing data rows ─────────────────────────────────────────────────
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
