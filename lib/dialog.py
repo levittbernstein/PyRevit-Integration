@@ -411,13 +411,36 @@ class ExportDialog(object):
     # Button handlers
     # ------------------------------------------------------------------
 
+    def _flush_grid_to_settings(self):
+        """Save current name-box and code-box values into self._recipients and self._settings
+        before any operation that rebuilds the grid."""
+        # Persist edited names back into self._recipients
+        for i, nb in enumerate(self._name_boxes):
+            if i < len(self._recipients):
+                self._recipients[i]['name'] = nb.Text.strip()
+
+        # Persist code-box values into self._settings['issues'] keyed by current name
+        saved_issues = dict(self._settings.get('issues', {}))
+        for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+            key = '{}||{}'.format(date_str, issued_by)
+            if key not in saved_issues:
+                saved_issues[key] = {}
+            for row_idx, recipient in enumerate(self._recipients):
+                cell = self._code_boxes.get((row_idx, col_idx))
+                if cell is not None:
+                    saved_issues[key][recipient['name']] = cell.Text.strip()
+        self._settings = dict(self._settings)
+        self._settings['issues'] = saved_issues
+
     def _on_add(self, sender, e):
+        self._flush_grid_to_settings()
         self._recipients.append({'name': '', 'row': len(self._recipients) + 4})
         self._build_grid()
 
     def _on_remove(self, sender, e):
         if not self._recipients:
             return
+        self._flush_grid_to_settings()
         idx = self._selected_row_idx
         if idx is None or idx >= len(self._recipients):
             idx = len(self._recipients) - 1
