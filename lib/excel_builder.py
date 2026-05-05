@@ -239,6 +239,18 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
         _apply_snapshot(_anchor, _hdr_snaps[_mc])
         _anchor.value = _hdr_values[_mc]
 
+    # ── Clear borders on interior header-padding cells ────────────────────
+    # Copying header-row styles into the padding rows brings yellow bottom
+    # borders from template date columns (beyond last_col) into the interior
+    # of the merged header block, causing spurious horizontal yellow lines.
+    # Clearing borders on every padding-row cell in ws._cells removes them.
+    # The yellow line at (eff_data_start-1)/eff_data_start is set on the
+    # anchor cells at eff_header_row and is NOT affected by this clear.
+    for _ir in range(eff_header_row + 1, eff_data_start):
+        for _ic in range(1, ws.max_column + 1):
+            if (_ir, _ic) in ws._cells:
+                ws.cell(row=_ir, column=_ic).border = Border()
+
     # ── Drawing data rows ─────────────────────────────────────────────────
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
                                      _date_data_snap, eff_data_start, settings=settings)
