@@ -144,6 +144,8 @@ class ExportDialog(object):
 
         if '+ Add recipient'    in _buttons: _buttons['+ Add recipient'].Click    += self._on_add
         if '− Remove selected'  in _buttons: _buttons['− Remove selected'].Click  += self._on_remove
+        if '↑ Move up'          in _buttons: _buttons['↑ Move up'].Click          += self._on_move_up
+        if '↓ Move down'        in _buttons: _buttons['↓ Move down'].Click        += self._on_move_down
         if 'Export Register'    in _buttons: _buttons['Export Register'].Click    += self._on_export
         if 'Cancel'             in _buttons: _buttons['Cancel'].Click             += self._on_cancel
 
@@ -422,6 +424,38 @@ class ExportDialog(object):
         self._recipients.pop(idx)
         self._selected_row_idx = None
         self._build_grid()
+
+    def _swap_rows(self, i, j):
+        """Swap the visible content (names + codes) between rows i and j."""
+        self._recipients[i], self._recipients[j] = self._recipients[j], self._recipients[i]
+        # Swap name TextBox texts
+        ti, tj = self._name_boxes[i].Text, self._name_boxes[j].Text
+        self._name_boxes[i].Text = tj
+        self._name_boxes[j].Text = ti
+        # Swap every code TextBox in each issue column
+        for col_idx in range(len(self._issue_keys)):
+            ci = self._code_boxes.get((i, col_idx))
+            cj = self._code_boxes.get((j, col_idx))
+            if ci is not None and cj is not None:
+                vi, vj = ci.Text, cj.Text
+                ci.Text = vj
+                cj.Text = vi
+
+    def _on_move_up(self, sender, e):
+        idx = self._selected_row_idx
+        if idx is None or idx <= 0 or idx >= len(self._recipients):
+            return
+        self._swap_rows(idx - 1, idx)
+        self._selected_row_idx = idx - 1
+        self._select_row(self._selected_row_idx)
+
+    def _on_move_down(self, sender, e):
+        idx = self._selected_row_idx
+        if idx is None or idx >= len(self._recipients) - 1:
+            return
+        self._swap_rows(idx, idx + 1)
+        self._selected_row_idx = idx + 1
+        self._select_row(self._selected_row_idx)
 
     def _on_export(self, sender, e):
         self._confirmed = True

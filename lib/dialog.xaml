@@ -179,6 +179,8 @@
             <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,8,0,0">
                 <Button Content="+ Add recipient" Style="{StaticResource SmallButton}"/>
                 <Button Content="− Remove selected" Style="{StaticResource SmallButton}"/>
+                <Button Content="↑ Move up"         Style="{StaticResource SmallButton}"/>
+                <Button Content="↓ Move down"       Style="{StaticResource SmallButton}"/>
             </StackPanel>
         </Grid>
 
