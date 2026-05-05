@@ -17,11 +17,11 @@ clr.AddReference('System.Xaml')
 from System.Windows import (
     Window, DependencyObject, LogicalTreeHelper,
     GridLength, Thickness, HorizontalAlignment, VerticalAlignment,
-    TextWrapping, TextAlignment,
+    TextWrapping, TextAlignment, Visibility,
 )
 from System.Windows.Controls import (
     TextBox, TextBlock, Grid, ColumnDefinition, RowDefinition,
-    ScrollViewer, Button,
+    ScrollViewer, Button, CheckBox, ComboBox,
 )
 from System.Windows.Media import Brushes
 import System.Windows.Markup as Markup
@@ -53,6 +53,11 @@ class ExportDialog(object):
         self._reg_date_box  = None
         self._reg_rev_box   = None
 
+        # Suitability controls (set in _setup_suitability)
+        self._suitability_cb    = None
+        self._suitability_panel = None
+        self._suit_boxes        = {}  # (pkg_idx, col_idx) -> ComboBox
+
         xaml_path = os.path.join(os.path.dirname(__file__), 'dialog.xaml')
         self._win = _load_xaml(xaml_path)
 
@@ -60,6 +65,7 @@ class ExportDialog(object):
         self._setup_project_info()
         self._setup_packages()
         self._build_grid()
+        self._setup_suitability()
         self._wire_buttons()
 
     # ------------------------------------------------------------------
@@ -295,6 +301,111 @@ class ExportDialog(object):
         return date_str
 
     # ------------------------------------------------------------------
+    # Suitability grid
+    # ------------------------------------------------------------------
+
+    def _setup_suitability(self):
+        self._suitability_cb    = self._win.FindName('SuitabilityEnabled')
+        self._suitability_panel = self._win.FindName('SuitabilityPanel')
+
+        if self._suitability_cb is not None:
+            enabled = self._settings.get('suitability_enabled', False)
+            self._suitability_cb.IsChecked = enabled
+            self._suitability_cb.Checked   += self._on_suitability_toggle
+            self._suitability_cb.Unchecked += self._on_suitability_toggle
+
+        self._build_suitability_grid()
+        self._update_suitability_visibility()
+
+    def _on_suitability_toggle(self, sender, e):
+        self._update_suitability_visibility()
+
+    def _update_suitability_visibility(self):
+        if self._suitability_panel is None or self._suitability_cb is None:
+            return
+        enabled = self._suitability_cb.IsChecked
+        self._suitability_panel.Visibility = (
+            Visibility.Visible if enabled else Visibility.Collapsed)
+
+    def _build_suitability_grid(self):
+        container = self._win.FindName('SuitabilityContainer')
+        if container is None or not self._all_packages:
+            return
+
+        container.Children.Clear()
+        container.ColumnDefinitions.Clear()
+        container.RowDefinitions.Clear()
+        self._suit_boxes = {}
+
+        n_issues = len(self._issue_keys)
+        _options  = ['', 'S01', 'S02', 'S03', 'S04', 'S05']
+
+        # Column definitions: col 0 = package name (160px), cols 1..n = issue dates (70px)
+        cd = ColumnDefinition()
+        cd.Width = GridLength(160)
+        container.ColumnDefinitions.Add(cd)
+        for _ in range(n_issues):
+            cd = ColumnDefinition()
+            cd.Width = GridLength(70)
+            container.ColumnDefinitions.Add(cd)
+
+        # Header row
+        rd = RowDefinition()
+        rd.Height = GridLength(46)
+        container.RowDefinitions.Add(rd)
+
+        self._header_cell(container, 'PACKAGE', 0, 0)
+        for col_idx, (date_str, _issued_by) in enumerate(self._issue_keys):
+            label = self._fmt_date(date_str) + '\nP{:02d}'.format(col_idx + 1)
+            self._header_cell(container, label, 0, col_idx + 1)
+
+        # One row per drawing package
+        saved_suit = self._settings.get('suitability_codes', {})
+
+        for pkg_idx, pkg in enumerate(self._all_packages):
+            rd = RowDefinition()
+            rd.Height = GridLength(28)
+            container.RowDefinitions.Add(rd)
+
+            bg = Brushes.White if pkg_idx % 2 == 0 else Brushes.WhiteSmoke
+
+            # Package name label
+            lbl = TextBlock()
+            lbl.Text              = pkg
+            lbl.Margin            = Thickness(6, 0, 6, 0)
+            lbl.VerticalAlignment = VerticalAlignment.Center
+            lbl.FontSize          = 11
+            lbl.Background        = bg
+            Grid.SetRow(lbl, pkg_idx + 1)
+            Grid.SetColumn(lbl, 0)
+            container.Children.Add(lbl)
+
+            # ComboBox per issue column
+            for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+                key       = '{}||{}'.format(date_str, issued_by)
+                saved_val = saved_suit.get(key, {}).get(pkg, '')
+
+                cb = ComboBox()
+                cb.Margin            = Thickness(1)
+                cb.FontSize          = 10
+                cb.Height            = 24
+                cb.VerticalAlignment = VerticalAlignment.Center
+                cb.BorderBrush       = Brushes.LightGray
+                cb.BorderThickness   = Thickness(0, 0, 1, 1)
+                cb.Background        = bg
+
+                for opt in _options:
+                    cb.Items.Add(opt)
+
+                idx = _options.index(saved_val) if saved_val in _options else 0
+                cb.SelectedIndex = idx
+
+                Grid.SetRow(cb, pkg_idx + 1)
+                Grid.SetColumn(cb, col_idx + 1)
+                container.Children.Add(cb)
+                self._suit_boxes[(pkg_idx, col_idx)] = cb
+
+    # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
 
@@ -365,5 +476,22 @@ class ExportDialog(object):
                 if cell is not None:
                     saved_issues[key][recipient['name']] = cell.Text.strip()
         updated['issues'] = saved_issues
+
+        # Suitability enabled (toggle — codes are preserved even when unchecked)
+        if self._suitability_cb is not None:
+            updated['suitability_enabled'] = bool(self._suitability_cb.IsChecked)
+
+        # Suitability codes
+        saved_suit = dict(updated.get('suitability_codes', {}))
+        for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+            key = '{}||{}'.format(date_str, issued_by)
+            if key not in saved_suit:
+                saved_suit[key] = {}
+            for pkg_idx, pkg in enumerate(self._all_packages):
+                cb = self._suit_boxes.get((pkg_idx, col_idx))
+                if cb is not None:
+                    val = cb.SelectedItem
+                    saved_suit[key][pkg] = str(val).strip() if val is not None else ''
+        updated['suitability_codes'] = saved_suit
 
         return True, updated

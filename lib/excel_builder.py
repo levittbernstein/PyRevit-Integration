@@ -145,7 +145,8 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     _date_data_snap = _snapshot_style(ws.cell(row=DATA_ROW_START, column=FIRST_DATE_COL))
     _date_hdr_snap  = _snapshot_style(ws.cell(row=HEADER_ROW,     column=FIRST_DATE_COL))
     _date_r3_snap   = _snapshot_style(ws.cell(row=3,              column=FIRST_DATE_COL))
-    _date_col_width = ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57
+    _date_col_width = (9.0 if settings.get('suitability_enabled')
+                       else ws.column_dimensions[get_column_letter(FIRST_DATE_COL)].width or 4.57)
 
     # How many date columns are already in the template?
     template_date_cols = ws.max_column - (FIRST_DATE_COL - 1)
@@ -240,7 +241,7 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
 
     # ── Drawing data rows ─────────────────────────────────────────────────
     last_data_row = _write_data_rows(ws, sheets_data, issue_keys, last_col,
-                                     _date_data_snap, eff_data_start)
+                                     _date_data_snap, eff_data_start, settings=settings)
 
     # ── Fix merge for rows 1 and 2 to cover the fixed columns ───────────
     # Row 1 merge stops at col K (FIRST_DATE_COL - 1) so the template logo
@@ -422,7 +423,10 @@ def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
 
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col,
-                     date_snap=None, data_start=DATA_ROW_START):
+                     date_snap=None, data_start=DATA_ROW_START, settings=None):
+    suitability_enabled = (settings or {}).get('suitability_enabled', False)
+    suitability_codes   = (settings or {}).get('suitability_codes', {}) if suitability_enabled else {}
+
     issue_idx = {key: i for i, key in enumerate(issue_keys)}
 
     # Capture non-date column styles from template data row before unmerge/clear.
@@ -491,8 +495,16 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col,
         for rev in sheet['revisions']:
             key = (rev['date'], rev.get('issued_by', ''))
             if key in issue_idx:
-                col = FIRST_DATE_COL + issue_idx[key]
-                ws.cell(row=r, column=col).value = rev['code']
+                col      = FIRST_DATE_COL + issue_idx[key]
+                rev_code = rev['code']
+                if suitability_enabled:
+                    issue_key_str = '{}||{}'.format(key[0], key[1])
+                    suit_code = suitability_codes.get(issue_key_str, {}).get(
+                        sheet['sheet_type'], '')
+                    cell_val = '{}/{}'.format(rev_code, suit_code) if suit_code else rev_code
+                else:
+                    cell_val = rev_code
+                ws.cell(row=r, column=col).value = cell_val
 
         current_row += 1
 
