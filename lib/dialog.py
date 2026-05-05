@@ -190,8 +190,7 @@ class ExportDialog(object):
 
         self._header_cell(container, 'RECIPIENT', 0, 0)
         for col_idx, (date_str, _issued_by) in enumerate(self._issue_keys):
-            label = self._fmt_date(date_str) + '\nP{:02d}'.format(col_idx + 1)
-            self._header_cell(container, label, 0, col_idx + 1)
+            self._header_cell(container, self._fmt_date(date_str), 0, col_idx + 1)
 
         # ── Recipient rows ────────────────────────────────────────────
         if not self._recipients:
@@ -358,8 +357,7 @@ class ExportDialog(object):
 
         self._header_cell(container, 'PACKAGE', 0, 0)
         for col_idx, (date_str, _issued_by) in enumerate(self._issue_keys):
-            label = self._fmt_date(date_str) + '\nP{:02d}'.format(col_idx + 1)
-            self._header_cell(container, label, 0, col_idx + 1)
+            self._header_cell(container, self._fmt_date(date_str), 0, col_idx + 1)
 
         # One row per drawing package
         saved_suit = self._settings.get('suitability_codes', {})
