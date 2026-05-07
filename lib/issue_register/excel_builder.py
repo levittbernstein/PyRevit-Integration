@@ -315,9 +315,9 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0  # unlimited pages tall — scale to fill width only
 
-    # ── Logo: right-aligned within pre-date columns (A–K), never entering col L ──
-    # Sum the pixel widths of every column before FIRST_DATE_COL, then right-align
-    # the logo so its right edge sits 4 px inside the right edge of col K.
+    # ── Logo: left edge aligned with col I, right edge capped before col L ──
+    # Anchor at the left edge of column I (col=8, 0-indexed).
+    # Cap logo width so it never crosses into column L (FIRST_DATE_COL).
     # Excel pixel formula: px = round((char_width + 0.71) × 7 + 5)
     ws._images.clear()
     if os.path.exists(_LOGO):
@@ -325,19 +325,18 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
             w = ws.column_dimensions[letter].width or 8
             return round((w + 0.71) * 7 + 5)
 
-        _pre_date_px = sum(
-            _col_px(get_column_letter(c)) for c in range(1, FIRST_DATE_COL)
-        )
+        _ci_px = _col_px('I')
+        _cj_px = _col_px('J')
+        _ck_px = _col_px('K')
 
-        _logo_h_px = 20
-        _logo_w_px = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
+        _logo_h_px  = 20
+        _logo_w_nat = round(753 / 56 * _logo_h_px)          # natural width at aspect ratio
+        _logo_w_px  = min(_logo_w_nat, _ci_px + _cj_px + _ck_px - 4)  # cap before col L
 
-        # Anchor at col A (col=0, 0-indexed); offset so right edge ends at right of col K.
-        _col_off_px = max(0, _pre_date_px - _logo_w_px - 4)
         _logo_img        = XLImage(_LOGO)
         _logo_img.height = _logo_h_px
         _logo_img.width  = _logo_w_px
-        _marker          = AnchorMarker(col=0, colOff=_col_off_px * 9525,
+        _marker          = AnchorMarker(col=8, colOff=0,    # col 8 = column I (0-indexed)
                                         row=0, rowOff=101600)
         _size            = XDRPositiveSize2D(cx=_logo_w_px * 9525, cy=_logo_h_px * 9525)
         _logo_img.anchor = OneCellAnchor(_from=_marker, ext=_size)
@@ -441,13 +440,12 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
             code_cell.fill  = _HEADER_FILL
             code_cell.value = code
 
-    # Remove only the BOTTOM border from the last distribution row's date cells
-    # so the block has a clean lower edge while retaining internal left/right gridlines.
+    # Ensure every date cell in the last distribution row has a full border
+    # (including bottom) so a gridline appears along the bottom edge of the block.
+    _ref_border = ref_code.border.copy() if ref_code.has_style else Border()
     _last_dc = max(FIRST_DATE_COL + len(issue_keys) - 1, 35)
     for c in range(FIRST_DATE_COL, _last_dc + 1):
-        cell = ws.cell(row=dist_last, column=c)
-        b = cell.border if cell.has_style else Border()
-        cell.border = Border(top=b.top, left=b.left, right=b.right)
+        ws.cell(row=dist_last, column=c).border = _ref_border
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
