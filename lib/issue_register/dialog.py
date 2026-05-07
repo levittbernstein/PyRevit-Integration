@@ -34,11 +34,14 @@ def _load_xaml(path):
 
 class ExportDialog(object):
 
-    def __init__(self, issue_keys, settings, all_packages=None, project_info=None):
+    def __init__(self, issue_keys, settings, all_packages=None, project_info=None,
+                 revision_index=None):
         self._issue_keys       = issue_keys
         self._settings         = settings
         self._all_packages     = all_packages or []
         self._project_info     = project_info or {}
+        # {(date_str, issued_by): set of sheet_types} — used to gate Uncontrolled checkboxes
+        self._revision_index   = revision_index or {}
         self._confirmed        = False
         self._name_boxes       = []
         self._code_boxes       = {}
@@ -498,8 +501,14 @@ class ExportDialog(object):
             Grid.SetColumn(lbl, 0)
             container.Children.Add(lbl)
 
-            # CheckBox per issue column (default: unchecked)
+            # CheckBox per issue column — only where at least one drawing in this
+            # package was actually issued on that date (otherwise cell stays blank).
             for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+                rev_key  = (date_str, issued_by)
+                has_data = pkg in self._revision_index.get(rev_key, set())
+                if not has_data:
+                    continue
+
                 key       = '{}||{}'.format(date_str, issued_by)
                 saved_val = saved_unc.get(key, {}).get(pkg, False)
 

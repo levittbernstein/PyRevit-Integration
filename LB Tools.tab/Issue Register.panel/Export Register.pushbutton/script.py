@@ -93,7 +93,19 @@ settings = load_settings(doc)
 
 # ── Settings dialog ───────────────────────────────────────────────────────────
 all_packages = sorted(set(s['sheet_type'] for s in sheets_data))
-dlg = ExportDialog(issue_keys, settings, all_packages=all_packages, project_info=project_info)
+
+# Build a lookup: (date_str, issued_by) -> set of sheet_types that have a revision there.
+# Used by the dialog to show Uncontrolled Formats checkboxes only where data exists.
+revision_index = {}
+for _s in sheets_data:
+    for _r in _s['revisions']:
+        _k = (_r['date'], _r.get('issued_by', ''))
+        if _k not in revision_index:
+            revision_index[_k] = set()
+        revision_index[_k].add(_s['sheet_type'])
+
+dlg = ExportDialog(issue_keys, settings, all_packages=all_packages,
+                   project_info=project_info, revision_index=revision_index)
 confirmed, updated_settings = dlg.show()
 
 if not confirmed:
