@@ -396,8 +396,14 @@ class ExportDialog(object):
             Grid.SetColumn(lbl, 0)
             container.Children.Add(lbl)
 
-            # ComboBox per issue column
+            # ComboBox per issue column — only where at least one drawing in this
+            # package was actually issued on that date.
             for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+                rev_key  = (date_str, issued_by)
+                has_data = pkg in self._revision_index.get(rev_key, set())
+                if not has_data:
+                    continue
+
                 key       = '{}||{}'.format(date_str, issued_by)
                 saved_val = saved_suit.get(key, {}).get(pkg, '')
 
