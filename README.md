@@ -31,20 +31,44 @@ Install Python packages into pyRevit's CPython environment:
 
 ---
 
-## Setup
+## Setup — single machine (manual)
 
-### 1. Install the extension
-Add this repo as a pyRevit extension source, or copy the extension folder into your pyRevit extensions directory.
+1. Install [pyRevit 4.8+](https://github.com/eirannejad/pyRevit/releases)
+2. pyRevit tab → Settings → CPython Engine → enable Python 3.x → restart Revit
+3. Add this repo as a pyRevit extension source (pyRevit Extension Manager → Add → paste the GitHub URL)
+4. Install Python packages into pyRevit's bundled CPython:
+   ```
+   "<pyrevit-cpython-path>\python.exe" -m pip install openpyxl Pillow pywin32
+   ```
 
-### 2. Enable CPython engine
-pyRevit tab → Settings → CPython Engine → enable Python 3.x → restart Revit.
+## Setup — company-wide deployment (remote)
 
-To verify: open the pyRevit console and run `import sys; print(sys.version)`.
+`deploy/Install-LBTools.ps1` automates the full deployment to any Windows workstation:
 
-### 3. Install Python packages
+1. Installs pyRevit silently
+2. Registers this GitHub repo as a pyRevit extension — **updates are automatic** on every Revit launch after any push to `main`
+3. Installs all required Python packages into pyRevit's CPython engine
+4. Enables the CPython engine in pyRevit settings
+
+### Deploying via Microsoft Intune
+
+1. In Intune → Devices → Scripts → Add (Windows → PowerShell)
+2. Upload `deploy/Install-LBTools.ps1`
+3. Set **Run script in 64-bit PowerShell** = Yes, **Run as** = System
+4. Assign to the target device group
+
+The script is idempotent — safe to run repeatedly and on machines that already have some steps complete.
+
+### Deploying via SCCM / login GPO
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -NonInteractive -File "\\server\share\Install-LBTools.ps1"
 ```
-"<pyrevit-cpython-path>\python.exe" -m pip install openpyxl Pillow pywin32
-```
+
+### How updates reach users
+
+Once deployed, pushing to the `main` branch on GitHub is all that's needed.  
+pyRevit checks for extension updates on each Revit launch and pulls the latest automatically — no further IT action required.
 
 ---
 
