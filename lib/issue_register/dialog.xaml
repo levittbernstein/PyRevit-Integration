@@ -192,7 +192,7 @@
             <Border Background="#111111" Margin="0,10,0,4" Padding="10,5">
                 <CheckBox x:Name="SuitabilityEnabled" VerticalAlignment="Center">
                     <CheckBox.Content>
-                        <TextBlock Text="SUITABILITY"
+                        <TextBlock Text="STATUS CODE"
                                    Foreground="White"
                                    FontFamily="Founders Grotesk Medium, Arial"
                                    FontSize="11" FontWeight="SemiBold"/>
