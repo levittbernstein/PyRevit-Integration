@@ -59,9 +59,11 @@ class ExportDialog(object):
         self._suit_boxes        = {}  # (pkg_idx, col_idx) -> ComboBox
 
         # Uncontrolled Formats controls (set in _setup_uncontrolled)
-        self._uncontrolled_cb    = None
-        self._uncontrolled_panel = None
-        self._unc_boxes          = {}  # (pkg_idx, col_idx) -> CheckBox
+        self._uncontrolled_header   = None
+        self._uncontrolled_arrow    = None
+        self._uncontrolled_panel    = None
+        self._uncontrolled_expanded = False
+        self._unc_boxes             = {}  # (pkg_idx, col_idx) -> CheckBox
 
         # Packages shown in the Uncontrolled grid (included only)
         excluded_set = set(self._settings.get('excluded_packages', []))
@@ -421,26 +423,29 @@ class ExportDialog(object):
     # ------------------------------------------------------------------
 
     def _setup_uncontrolled(self):
-        self._uncontrolled_cb    = self._win.FindName('UncontrolledEnabled')
-        self._uncontrolled_panel = self._win.FindName('UncontrolledPanel')
+        self._uncontrolled_header = self._win.FindName('UncontrolledHeader')
+        self._uncontrolled_arrow  = self._win.FindName('UncontrolledArrow')
+        self._uncontrolled_panel  = self._win.FindName('UncontrolledPanel')
 
-        if self._uncontrolled_cb is not None:
-            enabled = self._settings.get('uncontrolled_enabled', False)
-            self._uncontrolled_cb.SelectedIndex = 1 if enabled else 0
-            self._uncontrolled_cb.SelectionChanged += self._on_uncontrolled_toggle
+        self._uncontrolled_expanded = self._settings.get('uncontrolled_enabled', False)
+
+        if self._uncontrolled_header is not None:
+            self._uncontrolled_header.MouseLeftButtonDown += self._on_uncontrolled_toggle
 
         self._build_uncontrolled_grid()
         self._update_uncontrolled_visibility()
 
     def _on_uncontrolled_toggle(self, sender, e):
+        self._uncontrolled_expanded = not self._uncontrolled_expanded
         self._update_uncontrolled_visibility()
 
     def _update_uncontrolled_visibility(self):
-        if self._uncontrolled_panel is None or self._uncontrolled_cb is None:
-            return
-        enabled = self._uncontrolled_cb.SelectedIndex == 1
-        self._uncontrolled_panel.Visibility = (
-            Visibility.Visible if enabled else Visibility.Collapsed)
+        if self._uncontrolled_panel is not None:
+            self._uncontrolled_panel.Visibility = (
+                Visibility.Visible if self._uncontrolled_expanded else Visibility.Collapsed)
+        if self._uncontrolled_arrow is not None:
+            self._uncontrolled_arrow.Text = (
+                u'▼' if self._uncontrolled_expanded else u'▶')
 
     def _build_uncontrolled_grid(self):
         container = self._win.FindName('UncontrolledContainer')
@@ -652,8 +657,7 @@ class ExportDialog(object):
         updated['suitability_codes'] = saved_suit
 
         # Uncontrolled Formats enabled
-        if self._uncontrolled_cb is not None:
-            updated['uncontrolled_enabled'] = (self._uncontrolled_cb.SelectedIndex == 1)
+        updated['uncontrolled_enabled'] = self._uncontrolled_expanded
 
         # Uncontrolled Formats — boolean per (issue_key, package)
         saved_unc = dict(updated.get('uncontrolled_formats', {}))

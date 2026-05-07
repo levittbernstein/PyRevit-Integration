@@ -154,12 +154,16 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     # ── Insert extra distribution rows before the header row ─────────────
     if extra_dist_rows > 0:
         ws.insert_rows(HEADER_ROW, extra_dist_rows)
-        last_tmpl_dist = HEADER_ROW - 1  # row 10 — unchanged after insert_rows above
+        last_tmpl_dist    = HEADER_ROW - 1  # row 10 — unchanged after insert_rows above
+        # Use the second-to-last template dist row (row 9) as the style reference
+        # so inserted rows inherit full internal gridlines rather than any clean-edge
+        # styling that may be baked into the template's last distribution row.
+        style_tmpl_dist   = max(_DIST_FIRST_ROW, last_tmpl_dist - 1)
         for new_r in range(HEADER_ROW, eff_header_row):
             ws.row_dimensions[new_r].height = (
                 ws.row_dimensions[last_tmpl_dist].height or 15)
             for c in range(1, FIRST_DATE_COL + template_date_cols):
-                _copy_cell_style(ws.cell(row=last_tmpl_dist, column=c),
+                _copy_cell_style(ws.cell(row=style_tmpl_dist, column=c),
                                  ws.cell(row=new_r, column=c))
                 # Template cols A-H may be merged cells (no style); force grey fill.
                 ws.cell(row=new_r, column=c).fill = _HEADER_FILL
@@ -311,8 +315,9 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
     ws.page_setup.fitToWidth  = 1
     ws.page_setup.fitToHeight = 0  # unlimited pages tall — scale to fill width only
 
-    # ── Logo: right-aligned to end just before col L ──────────────────────
-    # Col I and col K are auto-sized above, so read their widths here.
+    # ── Logo: right-aligned within pre-date columns (A–K), never entering col L ──
+    # Sum the pixel widths of every column before FIRST_DATE_COL, then right-align
+    # the logo so its right edge sits 4 px inside the right edge of col K.
     # Excel pixel formula: px = round((char_width + 0.71) × 7 + 5)
     ws._images.clear()
     if os.path.exists(_LOGO):
@@ -320,18 +325,19 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
             w = ws.column_dimensions[letter].width or 8
             return round((w + 0.71) * 7 + 5)
 
-        _cj_px = _col_px('J')
-        _ck_px = _col_px('K')
+        _pre_date_px = sum(
+            _col_px(get_column_letter(c)) for c in range(1, FIRST_DATE_COL)
+        )
 
         _logo_h_px = 20
         _logo_w_px = round(753 / 56 * _logo_h_px)  # maintain 753:56 aspect ratio
 
-        # Anchor at col J (col=9, 0-indexed), right-align to end just before col L
-        _col_off_px = _cj_px + _ck_px - _logo_w_px - 4
+        # Anchor at col A (col=0, 0-indexed); offset so right edge ends at right of col K.
+        _col_off_px = max(0, _pre_date_px - _logo_w_px - 4)
         _logo_img        = XLImage(_LOGO)
         _logo_img.height = _logo_h_px
         _logo_img.width  = _logo_w_px
-        _marker          = AnchorMarker(col=9, colOff=max(0, _col_off_px) * 9525,
+        _marker          = AnchorMarker(col=0, colOff=_col_off_px * 9525,
                                         row=0, rowOff=101600)
         _size            = XDRPositiveSize2D(cx=_logo_w_px * 9525, cy=_logo_h_px * 9525)
         _logo_img.anchor = OneCellAnchor(_from=_marker, ext=_size)
@@ -435,13 +441,13 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
             code_cell.fill  = _HEADER_FILL
             code_cell.value = code
 
-    # Remove bottom and side borders from the last distribution row's date cells
-    # (L<dist_last>:AI<dist_last>) so the table has a clean lower edge.
+    # Remove only the BOTTOM border from the last distribution row's date cells
+    # so the block has a clean lower edge while retaining internal left/right gridlines.
     _last_dc = max(FIRST_DATE_COL + len(issue_keys) - 1, 35)
     for c in range(FIRST_DATE_COL, _last_dc + 1):
         cell = ws.cell(row=dist_last, column=c)
-        top_side = cell.border.top if cell.has_style else None
-        cell.border = Border(top=top_side)
+        b = cell.border if cell.has_style else Border()
+        cell.border = Border(top=b.top, left=b.left, right=b.right)
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
