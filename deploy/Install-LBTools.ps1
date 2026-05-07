@@ -26,21 +26,14 @@
 
 [CmdletBinding()]
 param(
-    [string]$PyRevitVersion = "4.8.16.24121",
-
-    # Paste your Fine-Grained Personal Access Token here (read-only, PyRevit-Integration only).
-    # Keep this file out of source control once the token is filled in — store it in your
-    # Intune / SCCM deployment system's secret/variable store instead.
-    [string]$GitHubToken = "PASTE_TOKEN_HERE"
+    [string]$PyRevitVersion = "4.8.16.24121"
 )
 
 $ErrorActionPreference = "Stop"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-# Token is embedded in the HTTPS URL so git/pyRevit can clone without
-# interactive credentials. The token is read-only and repo-scoped.
-$LBToolsRepoUrl  = "https://oauth2:${GitHubToken}@github.com/levittbernstein/PyRevit-Integration.git"
+$LBToolsRepoUrl  = "https://github.com/levittbernstein/PyRevit-Integration.git"
 $LBToolsName     = "LB Tools"
 $PyRevitCLI      = "$env:APPDATA\pyRevit-Master\bin\pyrevit.exe"
 $PyRevitInstaller = "https://github.com/eirannejad/pyRevit/releases/download/$PyRevitVersion/pyRevit_$($PyRevitVersion)_admin_install.exe"
