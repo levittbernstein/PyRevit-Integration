@@ -1,8 +1,8 @@
 {
     "type": "lib",
-    "name": "LB-IssueRegister",
-    "description": "Levitt Bernstein Issue Register exporter for Revit",
+    "name": "LB Tools",
+    "description": "Levitt Bernstein pyRevit tool suite for Autodesk Revit",
     "author": "Levitt Bernstein",
-    "url": "https://github.com/levittbernstein/Revit-issue-sheet",
+    "url": "https://github.com/levittbernstein/PyRevit-Integration",
     "version": "1.0.0"
 }

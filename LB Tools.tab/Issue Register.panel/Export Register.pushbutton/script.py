@@ -16,10 +16,9 @@ import subprocess
 
 from pyrevit import forms, revit
 
-# ── Add lib folder to path ────────────────────────────────────────────────────
-_EXT_LIB = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))),
-    'lib')
+# ── Add tool lib folder to path ───────────────────────────────────────────────
+_EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_EXT_LIB  = os.path.join(_EXT_ROOT, 'lib', 'issue_register')
 if _EXT_LIB not in sys.path:
     sys.path.insert(0, _EXT_LIB)
 
