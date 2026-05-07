@@ -456,8 +456,10 @@ def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
 
 def _write_data_rows(ws, sheets_data, issue_keys, last_col,
                      date_snap=None, data_start=DATA_ROW_START, settings=None):
-    suitability_enabled = (settings or {}).get('suitability_enabled', False)
-    suitability_codes   = (settings or {}).get('suitability_codes', {}) if suitability_enabled else {}
+    suitability_enabled  = (settings or {}).get('suitability_enabled', False)
+    suitability_codes    = (settings or {}).get('suitability_codes', {}) if suitability_enabled else {}
+    uncontrolled_enabled = (settings or {}).get('uncontrolled_enabled', False)
+    uncontrolled_formats = (settings or {}).get('uncontrolled_formats', {}) if uncontrolled_enabled else {}
 
     issue_idx = {key: i for i, key in enumerate(issue_keys)}
 
@@ -527,16 +529,31 @@ def _write_data_rows(ws, sheets_data, issue_keys, last_col,
         for rev in sheet['revisions']:
             key = (rev['date'], rev.get('issued_by', ''))
             if key in issue_idx:
-                col      = FIRST_DATE_COL + issue_idx[key]
-                rev_code = rev['code']
+                col           = FIRST_DATE_COL + issue_idx[key]
+                rev_code      = rev['code']
+                issue_key_str = '{}||{}'.format(key[0], key[1])
+
                 if suitability_enabled:
-                    issue_key_str = '{}||{}'.format(key[0], key[1])
                     suit_code = suitability_codes.get(issue_key_str, {}).get(
                         sheet['sheet_type'], '')
                     cell_val = '{}/{}'.format(rev_code, suit_code) if suit_code else rev_code
                 else:
                     cell_val = rev_code
-                ws.cell(row=r, column=col).value = cell_val
+
+                target_cell       = ws.cell(row=r, column=col)
+                target_cell.value = cell_val
+
+                # Red font when this package × issue is marked as uncontrolled
+                if uncontrolled_enabled:
+                    is_uncontrolled = uncontrolled_formats.get(
+                        issue_key_str, {}).get(sheet['sheet_type'], False)
+                    if is_uncontrolled:
+                        f = target_cell.font
+                        target_cell.font = Font(
+                            name=f.name, size=f.size, bold=f.bold,
+                            italic=f.italic, underline=f.underline,
+                            strike=f.strikethrough, color='FFFF0000',
+                        )
 
         current_row += 1
 

@@ -58,6 +58,16 @@ class ExportDialog(object):
         self._suitability_panel = None
         self._suit_boxes        = {}  # (pkg_idx, col_idx) -> ComboBox
 
+        # Uncontrolled Formats controls (set in _setup_uncontrolled)
+        self._uncontrolled_cb    = None
+        self._uncontrolled_panel = None
+        self._unc_boxes          = {}  # (pkg_idx, col_idx) -> CheckBox
+
+        # Packages shown in the Uncontrolled grid (included only)
+        excluded_set = set(self._settings.get('excluded_packages', []))
+        self._included_packages = [p for p in self._all_packages
+                                   if p not in excluded_set]
+
         xaml_path = os.path.join(os.path.dirname(__file__), 'dialog.xaml')
         self._win = _load_xaml(xaml_path)
 
@@ -66,6 +76,7 @@ class ExportDialog(object):
         self._setup_packages()
         self._build_grid()
         self._setup_suitability()
+        self._setup_uncontrolled()
         self._wire_buttons()
 
     # ------------------------------------------------------------------
@@ -406,6 +417,97 @@ class ExportDialog(object):
                 self._suit_boxes[(pkg_idx, col_idx)] = cb
 
     # ------------------------------------------------------------------
+    # Uncontrolled Formats grid
+    # ------------------------------------------------------------------
+
+    def _setup_uncontrolled(self):
+        self._uncontrolled_cb    = self._win.FindName('UncontrolledEnabled')
+        self._uncontrolled_panel = self._win.FindName('UncontrolledPanel')
+
+        if self._uncontrolled_cb is not None:
+            enabled = self._settings.get('uncontrolled_enabled', False)
+            self._uncontrolled_cb.SelectedIndex = 1 if enabled else 0
+            self._uncontrolled_cb.SelectionChanged += self._on_uncontrolled_toggle
+
+        self._build_uncontrolled_grid()
+        self._update_uncontrolled_visibility()
+
+    def _on_uncontrolled_toggle(self, sender, e):
+        self._update_uncontrolled_visibility()
+
+    def _update_uncontrolled_visibility(self):
+        if self._uncontrolled_panel is None or self._uncontrolled_cb is None:
+            return
+        enabled = self._uncontrolled_cb.SelectedIndex == 1
+        self._uncontrolled_panel.Visibility = (
+            Visibility.Visible if enabled else Visibility.Collapsed)
+
+    def _build_uncontrolled_grid(self):
+        container = self._win.FindName('UncontrolledContainer')
+        if container is None or not self._included_packages:
+            return
+
+        container.Children.Clear()
+        container.ColumnDefinitions.Clear()
+        container.RowDefinitions.Clear()
+        self._unc_boxes = {}
+
+        n_issues = len(self._issue_keys)
+
+        # Column definitions: col 0 = package name (160px), cols 1..n = issue dates (70px)
+        cd = ColumnDefinition()
+        cd.Width = GridLength(160)
+        container.ColumnDefinitions.Add(cd)
+        for _ in range(n_issues):
+            cd = ColumnDefinition()
+            cd.Width = GridLength(70)
+            container.ColumnDefinitions.Add(cd)
+
+        # Header row
+        rd = RowDefinition()
+        rd.Height = GridLength(46)
+        container.RowDefinitions.Add(rd)
+
+        self._header_cell(container, 'PACKAGE', 0, 0)
+        for col_idx, (date_str, _issued_by) in enumerate(self._issue_keys):
+            self._header_cell(container, self._fmt_date(date_str), 0, col_idx + 1)
+
+        # One row per included drawing package
+        saved_unc = self._settings.get('uncontrolled_formats', {})
+
+        for pkg_idx, pkg in enumerate(self._included_packages):
+            rd = RowDefinition()
+            rd.Height = GridLength(28)
+            container.RowDefinitions.Add(rd)
+
+            bg = Brushes.White if pkg_idx % 2 == 0 else Brushes.WhiteSmoke
+
+            # Package name label
+            lbl = TextBlock()
+            lbl.Text              = pkg
+            lbl.Margin            = Thickness(6, 0, 6, 0)
+            lbl.VerticalAlignment = VerticalAlignment.Center
+            lbl.FontSize          = 11
+            lbl.Background        = bg
+            Grid.SetRow(lbl, pkg_idx + 1)
+            Grid.SetColumn(lbl, 0)
+            container.Children.Add(lbl)
+
+            # CheckBox per issue column (default: unchecked)
+            for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+                key       = '{}||{}'.format(date_str, issued_by)
+                saved_val = saved_unc.get(key, {}).get(pkg, False)
+
+                cb = CheckBox()
+                cb.HorizontalAlignment = HorizontalAlignment.Center
+                cb.VerticalAlignment   = VerticalAlignment.Center
+                cb.IsChecked           = bool(saved_val)
+                Grid.SetRow(cb, pkg_idx + 1)
+                Grid.SetColumn(cb, col_idx + 1)
+                container.Children.Add(cb)
+                self._unc_boxes[(pkg_idx, col_idx)] = cb
+
+    # ------------------------------------------------------------------
     # Button handlers
     # ------------------------------------------------------------------
 
@@ -548,5 +650,21 @@ class ExportDialog(object):
                     val = cb.SelectedItem
                     saved_suit[key][pkg] = str(val).strip() if val is not None else ''
         updated['suitability_codes'] = saved_suit
+
+        # Uncontrolled Formats enabled
+        if self._uncontrolled_cb is not None:
+            updated['uncontrolled_enabled'] = (self._uncontrolled_cb.SelectedIndex == 1)
+
+        # Uncontrolled Formats — boolean per (issue_key, package)
+        saved_unc = dict(updated.get('uncontrolled_formats', {}))
+        for col_idx, (date_str, issued_by) in enumerate(self._issue_keys):
+            key = '{}||{}'.format(date_str, issued_by)
+            if key not in saved_unc:
+                saved_unc[key] = {}
+            for pkg_idx, pkg in enumerate(self._included_packages):
+                cb = self._unc_boxes.get((pkg_idx, col_idx))
+                if cb is not None:
+                    saved_unc[key][pkg] = bool(cb.IsChecked)
+        updated['uncontrolled_formats'] = saved_unc
 
         return True, updated
