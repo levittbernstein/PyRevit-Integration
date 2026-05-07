@@ -1,3 +1,7 @@
 lib/__pycache__/
+lib/issue_register/__pycache__/
 *.pyc
 *.pyo
+
+# Local copies of the deploy script with a real token filled in — never commit these
+deploy/Install-LBTools.local.ps1
