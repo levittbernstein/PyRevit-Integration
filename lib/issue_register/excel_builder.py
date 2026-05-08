@@ -400,15 +400,13 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     saved_issues = settings.get('issues', {})
     dist_last    = header_row - 1   # last distribution row (inclusive)
 
-    # ── Snapshot A4 rich-text content before unmerge flushes the cell cache ──
-    # A4 (the anchor of the left-filler merged block) carries rich-text
-    # formatting (bold + coloured runs).  _unmerge_region pops it from
-    # ws._cells and the clear loop then sets value=None, destroying it.
-    # We snapshot value, style, and original merge range here and restore
-    # all three as the very last operation so nothing can overwrite them.
-    _a4_cell  = ws.cell(row=_DIST_FIRST_ROW, column=1)
-    _a4_value = _a4_cell.value
-    _a4_snap  = _snapshot_style(_a4_cell)
+    # ── Preserve A4 by saving the raw Cell object before unmerge flushes it ──
+    # A4 uses t="inlineStr" in the template XML.  openpyxl reads that as a
+    # plain Python str, so snapshot/restore loses the cell-type attribute and
+    # the rich-text formatting baked into style index 196 is orphaned.
+    # Saving and re-injecting the actual Cell object bypasses all lossy
+    # property getters and lets openpyxl serialise it exactly as loaded.
+    _a4_saved = ws._cells.get((_DIST_FIRST_ROW, 1))
     _a4_merge = None
     for _mr in ws.merged_cells.ranges:
         if (_mr.min_row <= _DIST_FIRST_ROW <= _mr.max_row
@@ -463,10 +461,12 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     for c in range(FIRST_DATE_COL, _last_dc + 1):
         ws.cell(row=dist_last, column=c).border = _ref_border
 
-    # ── Restore A4 rich-text — must be last so the clear loop cannot clobber it ──
-    _a4_out = ws.cell(row=_DIST_FIRST_ROW, column=1)
-    _a4_out.value = _a4_value
-    _apply_snapshot(_a4_out, _a4_snap)
+    # ── Re-inject the original A4 Cell object — must be last ─────────────────
+    # Directly writing back into ws._cells[key] bypasses all lossy property
+    # setters and preserves the t="inlineStr" cell type exactly as the template
+    # stored it, keeping the Founders Grotesk Medium bold rich-text intact.
+    if _a4_saved is not None:
+        ws._cells[(_DIST_FIRST_ROW, 1)] = _a4_saved
     if _a4_merge:
         ws.merge_cells(start_row=_a4_merge[0], start_column=_a4_merge[1],
                        end_row=_a4_merge[2], end_column=_a4_merge[3])
