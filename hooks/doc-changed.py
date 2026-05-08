@@ -50,7 +50,10 @@ for eid in changed_ids:
     if not isinstance(el, FamilyInstance):
         continue
     cat = el.Category
-    if cat is None or int(cat.Id.IntegerValue) != door_cat_id:
+    if cat is None:
+        continue
+    cat_id_int = getattr(cat.Id, 'Value', None) or getattr(cat.Id, 'IntegerValue', None)
+    if int(cat_id_int) != door_cat_id:
         continue
     # write_handing returns without writing when the value is already correct,
     # but we still need the element in scope — collect it here so we can open
