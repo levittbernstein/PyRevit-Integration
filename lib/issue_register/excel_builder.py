@@ -400,6 +400,22 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     saved_issues = settings.get('issues', {})
     dist_last    = header_row - 1   # last distribution row (inclusive)
 
+    # ── Snapshot A4 rich-text content before unmerge flushes the cell cache ──
+    # A4 (the anchor of the left-filler merged block) carries rich-text
+    # formatting (bold + coloured runs).  _unmerge_region pops it from
+    # ws._cells and the clear loop then sets value=None, destroying it.
+    # We snapshot value, style, and original merge range here and restore
+    # all three as the very last operation so nothing can overwrite them.
+    _a4_cell  = ws.cell(row=_DIST_FIRST_ROW, column=1)
+    _a4_value = _a4_cell.value
+    _a4_snap  = _snapshot_style(_a4_cell)
+    _a4_merge = None
+    for _mr in ws.merged_cells.ranges:
+        if (_mr.min_row <= _DIST_FIRST_ROW <= _mr.max_row
+                and _mr.min_col <= 1 <= _mr.max_col):
+            _a4_merge = (_mr.min_row, _mr.min_col, _mr.max_row, _mr.max_col)
+            break
+
     # Capture style refs BEFORE unmerge flushes the cell cache.
     ref_label = ws.cell(row=_DIST_FIRST_ROW, column=10)
     ref_code  = ws.cell(row=_DIST_FIRST_ROW, column=FIRST_DATE_COL)
@@ -446,6 +462,14 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     _last_dc = max(FIRST_DATE_COL + len(issue_keys) - 1, 35)
     for c in range(FIRST_DATE_COL, _last_dc + 1):
         ws.cell(row=dist_last, column=c).border = _ref_border
+
+    # ── Restore A4 rich-text — must be last so the clear loop cannot clobber it ──
+    _a4_out = ws.cell(row=_DIST_FIRST_ROW, column=1)
+    _a4_out.value = _a4_value
+    _apply_snapshot(_a4_out, _a4_snap)
+    if _a4_merge:
+        ws.merge_cells(start_row=_a4_merge[0], start_column=_a4_merge[1],
+                       end_row=_a4_merge[2], end_column=_a4_merge[3])
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
