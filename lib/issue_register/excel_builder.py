@@ -10,7 +10,10 @@ The template (lib/template.xltx) already contains all formatting for:
 We load the template, clear/overwrite content, and save.
 """
 
+import io
 import os
+import re
+import zipfile
 from datetime import datetime
 
 from openpyxl import load_workbook
@@ -347,7 +350,86 @@ def build_register(sheets_data, issue_keys, settings, output_path, project_info)
 
     wb.template = False
     wb.save(output_path)
+
+    # ── Restore A4 rich-text ──────────────────────────────────────────────
+    # openpyxl flattens shared-string rich text to plain inlineStr on save.
+    # Patch the output ZIP directly: swap A4's <is> block for the original
+    # multi-run rich text from the template's shared strings table.
+    _patch_a4_rich_text(output_path, _TEMPLATE)
+
     return output_path
+
+
+# ── Rich-text patch ───────────────────────────────────────────────────────────
+
+def _patch_a4_rich_text(output_path, template_path):
+    """Restore A4's rich-text runs after openpyxl's lossy save.
+
+    openpyxl converts shared-string rich text (t="s" with <si><r>…</r></si>)
+    to a flat plain inlineStr on save, discarding all per-run bold/underline/
+    colour formatting.  This function re-injects the original <r> run elements
+    directly into the saved xlsx ZIP without touching any other cell.
+
+    The template stores A4 as a shared string reference.  We:
+      1. Read that shared string's inner XML (<r> runs) from the template.
+      2. Find A4 in the saved output's sheet1.xml (now a plain inlineStr).
+      3. Replace its <is><t>…</t></is> with <is>[original runs]</is>.
+      4. Rewrite the xlsx ZIP in-place.
+    """
+    # ── Read rich-text from template ─────────────────────────────────────
+    try:
+        with zipfile.ZipFile(template_path, 'r') as zt:
+            tmpl_ws  = zt.read('xl/worksheets/sheet1.xml').decode('utf-8')
+            tmpl_ss  = zt.read('xl/sharedStrings.xml').decode('utf-8')
+    except (KeyError, Exception):
+        return  # template doesn't have sharedStrings — nothing to do
+
+    a4_ref = re.search(r'<c r="A4"[^>]*\bt="s"[^>]*><v>(\d+)</v></c>', tmpl_ws)
+    if not a4_ref:
+        return  # A4 is not a shared string in template
+
+    ss_idx   = int(a4_ref.group(1))
+    ss_items = re.findall(r'<si>.*?</si>', tmpl_ss, re.DOTALL)
+    if ss_idx >= len(ss_items):
+        return
+
+    # Extract the inner content of <si>…</si>  (the <r> run elements)
+    inner = re.search(r'<si>(.*?)</si>', ss_items[ss_idx], re.DOTALL)
+    if not inner or '<r>' not in inner.group(1):
+        return  # not actually rich text
+
+    rich_runs = inner.group(1)
+
+    # ── Patch A4 in the saved output ─────────────────────────────────────
+    with zipfile.ZipFile(output_path, 'r') as zin:
+        arc = {name: zin.read(name) for name in zin.namelist()}
+
+    ws_xml = arc.get('xl/worksheets/sheet1.xml', b'').decode('utf-8')
+
+    def _replace_a4_is(m):
+        """Replace the <is>…</is> block inside A4's cell element."""
+        cell = m.group(0)
+        patched = re.sub(r'<is>.*?</is>',
+                         '<is>' + rich_runs + '</is>',
+                         cell, count=1, flags=re.DOTALL)
+        return patched
+
+    ws_patched = re.sub(
+        r'<c\s+r="A4"[^>]*>.*?</c>',
+        _replace_a4_is,
+        ws_xml,
+        count=1,
+        flags=re.DOTALL,
+    )
+    arc['xl/worksheets/sheet1.xml'] = ws_patched.encode('utf-8')
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as zout:
+        for name, data in arc.items():
+            zout.writestr(name, data)
+    buf.seek(0)
+    with open(output_path, 'wb') as f:
+        f.write(buf.read())
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
