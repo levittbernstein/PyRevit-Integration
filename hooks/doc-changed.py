@@ -69,8 +69,15 @@ if not doors_to_update:
     sys.exit()  # nothing to do — prevents unnecessary transaction + infinite loop
 
 # ── Update in a single transaction ───────────────────────────────────────────
-with Transaction(doc, 'LB - Update Door Handing') as t:
-    t.Start()
-    for door in doors_to_update:
-        write_handing(door)
-    t.Commit()
+# Guard against InvalidOperationException: Revit temporarily locks the
+# document during design-option edits, undo/redo, and certain external
+# commands.  If we cannot start a transaction here, skip this firing —
+# the hook will fire again once the model becomes modifiable.
+try:
+    with Transaction(doc, 'LB - Update Door Handing') as t:
+        t.Start()
+        for door in doors_to_update:
+            write_handing(door)
+        t.Commit()
+except Exception:
+    pass
