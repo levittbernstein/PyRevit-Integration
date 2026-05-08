@@ -400,37 +400,20 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     saved_issues = settings.get('issues', {})
     dist_last    = header_row - 1   # last distribution row (inclusive)
 
-    # ── Preserve A4 by saving the raw Cell object before unmerge flushes it ──
-    # A4 uses t="inlineStr" in the template XML.  openpyxl reads that as a
-    # plain Python str, so snapshot/restore loses the cell-type attribute and
-    # the rich-text formatting baked into style index 196 is orphaned.
-    # Saving and re-injecting the actual Cell object bypasses all lossy
-    # property getters and lets openpyxl serialise it exactly as loaded.
-    _a4_saved = ws._cells.get((_DIST_FIRST_ROW, 1))
-    _a4_merge = None
-    for _mr in ws.merged_cells.ranges:
-        if (_mr.min_row <= _DIST_FIRST_ROW <= _mr.max_row
-                and _mr.min_col <= 1 <= _mr.max_col):
-            _a4_merge = (_mr.min_row, _mr.min_col, _mr.max_row, _mr.max_col)
-            break
-
     # Capture style refs BEFORE unmerge flushes the cell cache.
     ref_label = ws.cell(row=_DIST_FIRST_ROW, column=10)
     ref_code  = ws.cell(row=_DIST_FIRST_ROW, column=FIRST_DATE_COL)
 
-    # Unmerge and clear all distribution rows.
-    # Cols 1-8: also remove template block merges (A4:H6, A7:H10 etc.) that
-    #           would leave stray gridlines on unused rows.
-    # Cols 9+ : unmerge per-row label merges; preserve template cell borders
-    #           so the distribution grid lines remain visible.
-    _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 1, ws.max_column)
+    # Unmerge and clear ONLY columns 9+ (recipient labels and issue codes).
+    # Columns A–H (1–8) are left exactly as the template formatted them.
+    # A4 carries inlineStr rich-text that openpyxl cannot losslessly
+    # round-trip via property setters, so we never touch it.
+    _unmerge_region(ws, _DIST_FIRST_ROW, dist_last, 9, ws.max_column)
     for r in range(_DIST_FIRST_ROW, header_row):
-        for c in range(1, ws.max_column + 1):
+        for c in range(9, ws.max_column + 1):
             cell = ws.cell(row=r, column=c)
             cell.fill  = _HEADER_FILL
             cell.value = None
-            if c < 9:  # left filler area — no border
-                cell.border = Border()
 
     for i, recipient in enumerate(recipients):
         row    = _DIST_FIRST_ROW + i
@@ -461,15 +444,6 @@ def _write_distribution_block(ws, issue_keys, settings, header_row):
     for c in range(FIRST_DATE_COL, _last_dc + 1):
         ws.cell(row=dist_last, column=c).border = _ref_border
 
-    # ── Re-inject the original A4 Cell object — must be last ─────────────────
-    # Directly writing back into ws._cells[key] bypasses all lossy property
-    # setters and preserves the t="inlineStr" cell type exactly as the template
-    # stored it, keeping the Founders Grotesk Medium bold rich-text intact.
-    if _a4_saved is not None:
-        ws._cells[(_DIST_FIRST_ROW, 1)] = _a4_saved
-    if _a4_merge:
-        ws.merge_cells(start_row=_a4_merge[0], start_column=_a4_merge[1],
-                       end_row=_a4_merge[2], end_column=_a4_merge[3])
 
 
 def _write_date_headers(ws, issue_keys, date_snap=None, header_row=HEADER_ROW):
