@@ -157,17 +157,22 @@ class ExtensibleStorageManager(object):
         schema = self._get_schema()
         ds     = self.find_element(doc)
         if ds is None:
-            # Resolve DataStorage via reflection on Schema's assembly — both
-            # types live in RevitAPI.dll, and Schema imports fine even inside
-            # a Python package context.
-            import clr                                                       # noqa: PLC0415
-            from Autodesk.Revit.DB.ExtensibleStorage import Schema as _Sch  # noqa: PLC0415
-            _ds_type = clr.GetClrType(_Sch).Assembly.GetType(
-                'Autodesk.Revit.DB.DataStorage')
+            # Scan all loaded assemblies for Autodesk.Revit.DB.DataStorage —
+            # the type's home assembly varies across Revit versions so we
+            # cannot hardcode an assembly name.
+            _ds_type = None
+            for _asm in _Sys.AppDomain.CurrentDomain.GetAssemblies():
+                try:
+                    _t = _asm.GetType('Autodesk.Revit.DB.DataStorage')
+                    if _t is not None:
+                        _ds_type = _t
+                        break
+                except Exception:
+                    pass
             if _ds_type is None:
                 raise RuntimeError(
-                    '[{}] GetType returned None for DataStorage'.format(
-                        self._schema_name))
+                    '[{}] DataStorage type not found in any loaded assembly'
+                    .format(self._schema_name))
             ds = _ds_type.GetMethod('Create').Invoke(
                 None, _Sys.Array[_Sys.Object]([doc]))
             ds.Name = self._element_name
