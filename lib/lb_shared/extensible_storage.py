@@ -157,20 +157,19 @@ class ExtensibleStorageManager(object):
         schema = self._get_schema()
         ds     = self.find_element(doc)
         if ds is None:
-            # Use .NET reflection to call DataStorage.Create — avoids the
-            # IronPython package-context import failure for DataStorage.
-            ds = None
-            for _asm in _Sys.AppDomain.CurrentDomain.GetAssemblies():
-                if _asm.GetName().Name == 'RevitAPI':
-                    _ds_type = _asm.GetType('Autodesk.Revit.DB.DataStorage')
-                    if _ds_type is not None:
-                        _args = _Sys.Array[_Sys.Object]([doc])
-                        ds = _ds_type.GetMethod('Create').Invoke(None, _args)
-                    break
-            if ds is None:
+            # Resolve DataStorage via reflection on Schema's assembly — both
+            # types live in RevitAPI.dll, and Schema imports fine even inside
+            # a Python package context.
+            import clr                                                       # noqa: PLC0415
+            from Autodesk.Revit.DB.ExtensibleStorage import Schema as _Sch  # noqa: PLC0415
+            _ds_type = clr.GetClrType(_Sch).Assembly.GetType(
+                'Autodesk.Revit.DB.DataStorage')
+            if _ds_type is None:
                 raise RuntimeError(
-                    '[{}] Could not locate RevitAPI assembly to create '
-                    'DataStorage element.'.format(self._schema_name))
+                    '[{}] GetType returned None for DataStorage'.format(
+                        self._schema_name))
+            ds = _ds_type.GetMethod('Create').Invoke(
+                None, _Sys.Array[_Sys.Object]([doc]))
             ds.Name = self._element_name
 
         entity = Entity(schema)
