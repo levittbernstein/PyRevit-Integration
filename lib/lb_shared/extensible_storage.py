@@ -69,12 +69,14 @@ class ExtensibleStorageManager(object):
         Defaults to ``'Data'``.
     """
 
-    def __init__(self, schema_guid, schema_name, element_name, json_field='Data'):
-        self._guid         = schema_guid
-        self._schema_name  = schema_name
-        self._element_name = element_name
-        self._field        = json_field
-        self._schema_cache = None  # populated on first _get_schema() call
+    def __init__(self, schema_guid, schema_name, element_name, json_field='Data',
+                 data_storage_class=None):
+        self._guid              = schema_guid
+        self._schema_name       = schema_name
+        self._element_name      = element_name
+        self._field             = json_field
+        self._data_storage_class = data_storage_class  # injected by caller
+        self._schema_cache      = None  # populated on first _get_schema() call
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
@@ -153,28 +155,15 @@ class ExtensibleStorageManager(object):
         """
         from Autodesk.Revit.DB.ExtensibleStorage import Entity  # noqa: PLC0415
         import System as _Sys                                    # noqa: PLC0415
-
         schema = self._get_schema()
         ds     = self.find_element(doc)
         if ds is None:
-            # Scan all loaded assemblies for Autodesk.Revit.DB.DataStorage —
-            # the type's home assembly varies across Revit versions so we
-            # cannot hardcode an assembly name.
-            _ds_type = None
-            for _asm in _Sys.AppDomain.CurrentDomain.GetAssemblies():
-                try:
-                    _t = _asm.GetType('Autodesk.Revit.DB.DataStorage')
-                    if _t is not None:
-                        _ds_type = _t
-                        break
-                except Exception:
-                    pass
-            if _ds_type is None:
+            if self._data_storage_class is None:
                 raise RuntimeError(
-                    '[{}] DataStorage type not found in any loaded assembly'
-                    .format(self._schema_name))
-            ds = _ds_type.GetMethod('Create').Invoke(
-                None, _Sys.Array[_Sys.Object]([doc]))
+                    '[{}] No DataStorage class provided — pass '
+                    'data_storage_class=DataStorage when constructing '
+                    'ExtensibleStorageManager.'.format(self._schema_name))
+            ds      = self._data_storage_class.Create(doc)
             ds.Name = self._element_name
 
         entity = Entity(schema)
