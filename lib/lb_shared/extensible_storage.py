@@ -2,11 +2,11 @@
 """
 Reusable Revit Extensible Storage manager for LB pyRevit plugins.
 
-Each plugin creates its own ExtensibleStorageManager instance with a unique
-schema GUID.  Different instances are completely independent — they each own
-a separate DataStorage element in the model, with separate worksharing
-ownership, so two plugins can be used simultaneously by different users with
-no interference.
+Settings are stored as a JSON blob on the model's ProjectInformation element,
+which always exists and requires no import of the DataStorage class (whose
+import is broken in IronPython's package context across multiple Revit versions).
+
+Each plugin uses its own schema GUID so the entities are completely independent.
 
 Quick-start
 -----------
@@ -15,7 +15,6 @@ Quick-start
     _store = ExtensibleStorageManager(
         schema_guid  = 'YOUR-UNIQUE-GUID-HERE',   # generate once, never change
         schema_name  = 'LBYourPluginSettings',
-        element_name = 'LBYourPluginStorage',
     )
 
     # Read — no Transaction needed
@@ -51,8 +50,8 @@ def _eid_int(element_id):
 
 class ExtensibleStorageManager(object):
     """
-    Manages a single Revit DataStorage element that stores an arbitrary
-    JSON blob in one String field.
+    Stores an arbitrary JSON blob in Extensible Storage on the model's
+    ProjectInformation element (always present, no creation required).
 
     Parameters
     ----------
@@ -62,21 +61,18 @@ class ExtensibleStorageManager(object):
         sessions and users.
     schema_name : str
         Human-readable schema name shown in Revit's diagnostic tools.
-    element_name : str
-        Name given to the DataStorage element in the model.
     json_field : str, optional
         Name of the single String field inside the schema.
         Defaults to ``'Data'``.
     """
 
-    def __init__(self, schema_guid, schema_name, element_name, json_field='Data',
-                 data_storage_class=None):
-        self._guid              = schema_guid
-        self._schema_name       = schema_name
-        self._element_name      = element_name
-        self._field             = json_field
-        self._data_storage_class = data_storage_class  # injected by caller
-        self._schema_cache      = None  # populated on first _get_schema() call
+    def __init__(self, schema_guid, schema_name, json_field='Data', **kwargs):
+        # **kwargs absorbs legacy parameters (element_name, data_storage_class)
+        # so callers don't need to be updated immediately.
+        self._guid         = schema_guid
+        self._schema_name  = schema_name
+        self._field        = json_field
+        self._schema_cache = None  # populated on first _get_schema() call
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
@@ -103,28 +99,15 @@ class ExtensibleStorageManager(object):
         self._schema_cache = builder.Finish()
         return self._schema_cache
 
-    # ── DataStorage element ────────────────────────────────────────────────────
+    # ── Storage element ───────────────────────────────────────────────────────
 
+    def _get_element(self, doc):
+        """Return the element used for storage (ProjectInformation)."""
+        return doc.ProjectInformation
+
+    # kept for backwards-compat with any code that calls find_element directly
     def find_element(self, doc):
-        """Return the DataStorage element for this schema, or None."""
-        from Autodesk.Revit.DB import FilteredElementCollector                  # noqa: PLC0415
-        from Autodesk.Revit.DB.ExtensibleStorage import (                       # noqa: PLC0415
-            Schema, ExtensibleStorageFilter,
-        )
-        import System                                                            # noqa: PLC0415
-
-        # Use ExtensibleStorageFilter — the purpose-built Revit API filter for
-        # locating DataStorage elements by schema GUID.  This avoids importing
-        # the DataStorage class itself, which IronPython cannot resolve as a
-        # namespace attribute inside a Python package context.
-        guid   = System.Guid(self._guid)
-        schema = Schema.Lookup(guid)
-        if schema is None:
-            return None
-        col = list(FilteredElementCollector(doc).WherePasses(
-            ExtensibleStorageFilter(guid)
-        ))
-        return col[0] if col else None
+        return self._get_element(doc)
 
     # ── Read ──────────────────────────────────────────────────────────────────
 
@@ -135,11 +118,12 @@ class ExtensibleStorageManager(object):
         """
         try:
             schema = self._get_schema()
-            ds     = self.find_element(doc)
-            if ds is None:
-                return None
+            el     = self._get_element(doc)
             import System as _Sys  # noqa: PLC0415
-            raw = ds.GetEntity(schema).Get[_Sys.String](self._field)
+            entity = el.GetEntity(schema)
+            if not entity.IsValid():
+                return None
+            raw = entity.Get[_Sys.String](self._field)
             return json.loads(raw) if raw else None
         except Exception as exc:
             print('[{}] load error: {}'.format(self._schema_name, exc))
@@ -151,59 +135,29 @@ class ExtensibleStorageManager(object):
         """
         Persist *data* (any JSON-serialisable value, typically a dict).
         Must be called inside an open Revit Transaction.
-        Creates the DataStorage element on the first call.
         """
         from Autodesk.Revit.DB.ExtensibleStorage import Entity  # noqa: PLC0415
         import System as _Sys                                    # noqa: PLC0415
-        schema = self._get_schema()
-        ds     = self.find_element(doc)
-        if ds is None:
-            if self._data_storage_class is None:
-                raise RuntimeError(
-                    '[{}] No DataStorage class provided — pass '
-                    'data_storage_class=DataStorage when constructing '
-                    'ExtensibleStorageManager.'.format(self._schema_name))
-            ds      = self._data_storage_class.Create(doc)
-            ds.Name = self._element_name
 
+        schema = self._get_schema()
+        el     = self._get_element(doc)
         entity = Entity(schema)
         entity.Set[_Sys.String](self._field, json.dumps(data, ensure_ascii=False))
-        ds.SetEntity(entity)
+        el.SetEntity(entity)
 
     # ── Worksharing ownership ─────────────────────────────────────────────────
 
     def check_and_acquire_ownership(self, doc):
         """
-        For workshared models: verify the DataStorage element is not owned by
-        another user, then check it out from the central server via
-        ``WorksharingUtils.CheckoutElements``.
+        For workshared models: verify the ProjectInformation element is not
+        owned by another user, then check it out from the central server.
 
-        This is the same mechanism Revit uses to prevent two users editing the
-        same wall — once checked out, other users see
-        ``CheckoutStatus.OwnedByOtherUser`` and cannot commit changes to this
-        element.  Ownership is released when the current user next syncs to
-        central.
-
-        Returns
-        -------
-        (can_proceed : bool, owner_name : str)
-
-        ``(True, '')``
-            Not a workshared model, the element doesn't exist yet, or the
-            element was successfully checked out for the current user.
-
-        ``(False, 'username')``
-            The element is currently owned by *username*.  Show a message and
-            abort — the user should wait until the owner has synced to central.
+        Returns (can_proceed: bool, owner_name: str).
         """
         if not doc.IsWorkshared:
             return True, ''
 
-        ds = self.find_element(doc)
-        if ds is None:
-            # Element is created during the first save Transaction.
-            # A non-existent element has no owner.
-            return True, ''
+        el = self._get_element(doc)
 
         try:
             from Autodesk.Revit.DB import (                      # noqa: PLC0415
@@ -211,25 +165,19 @@ class ExtensibleStorageManager(object):
             )
             from System.Collections.Generic import List          # noqa: PLC0415
 
-            # Fast local check (based on last-sync state).
-            status = WorksharingUtils.GetCheckoutStatus(doc, ds.Id)
+            status = WorksharingUtils.GetCheckoutStatus(doc, el.Id)
             if status == CheckoutStatus.OwnedByOtherUser:
-                return False, self._owner_name(doc, ds.Id)
+                return False, self._owner_name(doc, el.Id)
 
-            # If we don't already own it, ask the central server to reserve it.
             if status != CheckoutStatus.OwnedByCurrentUser:
                 ids = List[ElementId]()
-                ids.Add(ds.Id)
+                ids.Add(el.Id)
                 checked_out    = WorksharingUtils.CheckoutElements(doc, ids)
                 checked_values = set(_eid_int(e) for e in checked_out)
-                if _eid_int(ds.Id) not in checked_values:
-                    # Central server confirmed it is owned by someone else.
-                    return False, self._owner_name(doc, ds.Id)
+                if _eid_int(el.Id) not in checked_values:
+                    return False, self._owner_name(doc, el.Id)
 
         except Exception as exc:
-            # Network error, non-workshared cloud variant, or unsupported API.
-            # Proceed — the save Transaction will surface any real conflict
-            # at commit time, which is still a safe failure mode.
             print('[{}] check_and_acquire_ownership error: {}'.format(
                 self._schema_name, exc))
 

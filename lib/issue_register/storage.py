@@ -16,15 +16,12 @@ if _LIB_ROOT not in sys.path:
     sys.path.insert(0, _LIB_ROOT)
 
 from lb_shared.extensible_storage import ExtensibleStorageManager  # noqa: E402
-from Autodesk.Revit.DB import DataStorage                          # noqa: E402
 
 # ── Storage instance — one per plugin, each with a unique GUID ───────────────
 _store = ExtensibleStorageManager(
-    schema_guid        = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061',  # fixed — do not change
-    schema_name        = 'LBIssueRegisterSettings',
-    element_name       = 'LBIssueRegisterStorage',
-    json_field         = 'SettingsJson',
-    data_storage_class = DataStorage,
+    schema_guid  = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061',  # fixed — do not change
+    schema_name  = 'LBIssueRegisterSettings',
+    json_field   = 'SettingsJson',
 )
 
 # ── Default settings ──────────────────────────────────────────────────────────
