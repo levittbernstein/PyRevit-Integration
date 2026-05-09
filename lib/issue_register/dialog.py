@@ -612,12 +612,8 @@ class ExportDialog(object):
     # Public interface
     # ------------------------------------------------------------------
 
-    def show(self):
-        self._win.ShowDialog()
-
-        if not self._confirmed:
-            return False, self._settings
-
+    def _collect_settings(self):
+        """Read all control values and return an updated settings dict."""
         updated = dict(self._settings)
 
         # Project information
@@ -686,4 +682,11 @@ class ExportDialog(object):
                     saved_unc[key][pkg] = bool(cb.IsChecked)
         updated['uncontrolled_formats'] = saved_unc
 
-        return True, updated
+        return updated
+
+    def show(self):
+        self._win.ShowDialog()
+        # Always collect current control values — this ensures settings are
+        # saved even when the user closes the dialog without exporting.
+        updated = self._collect_settings()
+        return self._confirmed, updated
