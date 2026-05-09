@@ -107,10 +107,13 @@ class ExtensibleStorageManager(object):
         """Return the DataStorage element for this schema, or None."""
         from Autodesk.Revit.DB import FilteredElementCollector              # noqa: PLC0415
         from Autodesk.Revit.DB.ExtensibleStorage import Schema              # noqa: PLC0415
-        import Autodesk.Revit.DB                                            # noqa: PLC0415
         import System                                                        # noqa: PLC0415
 
-        DataStorage = Autodesk.Revit.DB.DataStorage
+        # __import__ with fromlist forces IronPython to resolve the type even
+        # inside a package context where 'from Autodesk.Revit.DB import X' fails.
+        _adb = __import__('Autodesk.Revit.DB', fromlist=['DataStorage'])
+        DataStorage = _adb.DataStorage
+
         schema = Schema.Lookup(System.Guid(self._guid))
         if schema is None:
             return None
@@ -146,11 +149,11 @@ class ExtensibleStorageManager(object):
         Must be called inside an open Revit Transaction.
         Creates the DataStorage element on the first call.
         """
-        from Autodesk.Revit.DB.ExtensibleStorage import Entity       # noqa: PLC0415
-        import Autodesk.Revit.DB                                     # noqa: PLC0415
-        import System as _Sys                                         # noqa: PLC0415
+        from Autodesk.Revit.DB.ExtensibleStorage import Entity                # noqa: PLC0415
+        import System as _Sys                                                  # noqa: PLC0415
 
-        DataStorage = Autodesk.Revit.DB.DataStorage
+        _adb = __import__('Autodesk.Revit.DB', fromlist=['DataStorage'])
+        DataStorage = _adb.DataStorage
         schema = self._get_schema()
         ds     = self.find_element(doc)
         if ds is None:
