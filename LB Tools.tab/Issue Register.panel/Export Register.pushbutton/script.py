@@ -130,7 +130,7 @@ with Transaction(doc, 'LB Issue Register — save settings') as _t:
     try:
         save_settings(doc, updated_settings)
         _t.Commit()
-    except Exception as _save_exc:
+    except Exception:
         _t.RollBack()
         forms.alert(
             'Settings could not be saved to the model.\n\n' + traceback.format_exc(),

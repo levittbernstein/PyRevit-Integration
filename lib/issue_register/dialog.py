@@ -554,7 +554,7 @@ class ExportDialog(object):
 
     def _on_add(self, sender, e):
         self._flush_grid_to_settings()
-        self._recipients.append({'name': '', 'row': len(self._recipients) + 4})
+        self._recipients.append({'name': ''})
         self._build_grid()
 
     def _on_remove(self, sender, e):
@@ -633,8 +633,8 @@ class ExportDialog(object):
 
         # Recipients
         updated_recipients = [
-            {'name': nb.Text.strip(), 'row': self._recipients[i].get('row', i + 4)}
-            for i, nb in enumerate(self._name_boxes)
+            {'name': nb.Text.strip()}
+            for nb in self._name_boxes
         ]
         updated['recipients'] = updated_recipients
 

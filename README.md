@@ -17,7 +17,7 @@ A growing suite of Revit automation tools for Levitt Bernstein, delivered as a s
 | Requirement | Notes |
 |---|---|
 | Autodesk Revit 2022–2027 | |
-| pyRevit 4.8+ | Must use **CPython engine** |
+| pyRevit 6.4+ | |
 | Microsoft Excel | Required for PDF export via COM |
 | `openpyxl` | `pip install openpyxl` |
 | `Pillow` | `pip install Pillow` |
@@ -33,10 +33,9 @@ Install Python packages into pyRevit's CPython environment:
 
 ## Setup — single machine (manual)
 
-1. Install [pyRevit 4.8+](https://github.com/eirannejad/pyRevit/releases)
-2. pyRevit tab → Settings → CPython Engine → enable Python 3.x → restart Revit
-3. Add this repo as a pyRevit extension source (pyRevit Extension Manager → Add → paste the GitHub URL)
-4. Install Python packages into pyRevit's bundled CPython:
+1. Install [pyRevit 6.4+](https://github.com/eirannejad/pyRevit/releases)
+2. Add this repo as a pyRevit extension source (pyRevit Extension Manager → Add → paste the GitHub URL)
+3. Install Python packages into pyRevit's bundled CPython:
    ```
    "<pyrevit-cpython-path>\python.exe" -m pip install openpyxl Pillow pywin32
    ```
@@ -48,7 +47,6 @@ Install Python packages into pyRevit's CPython environment:
 1. Installs pyRevit silently
 2. Registers this GitHub repo as a pyRevit extension — **updates are automatic** on every Revit launch after any push to `main`
 3. Installs all required Python packages into pyRevit's CPython engine
-4. Enables the CPython engine in pyRevit settings
 
 ### Deploying via Microsoft Intune
 
@@ -85,6 +83,8 @@ LB-IssueRegister.extension/        ← pyRevit extension root (must end in .exte
 │       └── <Button>.pushbutton/
 │           └── script.py
 └── lib/
+    ├── lb_shared/                  ← shared utilities used by all tools
+    │   └── extensible_storage.py   ← Revit Extensible Storage manager
     ├── issue_register/             ← all code for the Issue Register tool
     │   ├── revit_reader.py         ← Revit API data extraction
     │   ├── storage.py              ← per-project settings persistence
@@ -143,9 +143,35 @@ CPython worker via `subprocess.Popen`.
 
 ### 4. Settings persistence (optional)
 
-Use Revit Extensible Storage + a JSON sidecar file for per-project settings.
-Each tool needs its own unique schema GUID so storage doesn't collide.
-See `lib/issue_register/storage.py` for the full pattern.
+Use `lib/lb_shared/extensible_storage.py` for per-project settings. Each tool
+needs its own unique schema GUID so the storage elements are completely
+independent — including independent worksharing ownership.
+
+```python
+# In your tool's storage.py (a flat module, not inside a package):
+import sys, os
+_LIB_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _LIB_ROOT not in sys.path:
+    sys.path.insert(0, _LIB_ROOT)
+
+import clr
+from Autodesk.Revit.DB import Transaction as _Txn
+_DataStorage = clr.GetClrType(_Txn).Assembly.GetType('Autodesk.Revit.DB.DataStorage')
+
+from lb_shared.extensible_storage import ExtensibleStorageManager
+_store = ExtensibleStorageManager(
+    schema_guid        = 'YOUR-UNIQUE-GUID-HERE',   # generate once, never change
+    schema_name        = 'LBYourToolSettings',
+    element_name       = 'LBYourToolStorage',
+    json_field         = 'SettingsJson',
+    data_storage_class = _DataStorage,
+)
+```
+
+Generate a GUID: `python -c "import uuid; print(str(uuid.uuid4()).upper())"`
+
+See `lib/issue_register/storage.py` for the full pattern including defaults and
+merge logic.
 
 ---
 
@@ -181,7 +207,97 @@ See `lib/issue_register/storage.py` for the full pattern.
 1. Open a Revit project
 2. **LB Tools** tab → **Issue Register** panel → **Export Register**
 3. Fill in the settings dialog (pre-populated from previous runs)
-4. Click **Export Register** and choose an output folder
+4. Click **Export Register** and choose an output folder, or just close the dialog to save settings without exporting
 5. Files saved as `<YYMMDD>_<ProjectNumber>-LB-Issue-Register_<Rev>.xlsx/.pdf`
 
-Settings persist per `.rvt` file via a JSON sidecar file (primary) and Revit Extensible Storage (backup).
+Settings persist per `.rvt` file via Revit Extensible Storage on a dedicated
+DataStorage element. In workshared models the element is checked out when the
+dialog opens, preventing two users editing the settings simultaneously.
+
+---
+
+## Developer notes — IronPython gotchas
+
+pyRevit runs `script.py` and any modules it imports under IronPython. This
+creates some sharp edges that have already caused bugs in this project.
+
+### ❌ Never use `sys.exit()` after committing a Revit Transaction
+
+**Symptom:** Transaction commits without error, but changes are not present in
+the model on the next script run.
+
+**Cause:** `sys.exit(n)` raises `SystemExit`. pyRevit catches `SystemExit`
+during script teardown and rolls back any transactions associated with that
+script execution — even ones that were explicitly committed.
+
+**Fix:** Never call `sys.exit()` after a Transaction commit. Instead, structure
+your code so the script falls off the end naturally:
+
+```python
+# ❌ WRONG — pyRevit rolls back the Transaction on SystemExit
+with Transaction(doc, '...') as t:
+    t.Start()
+    save(doc, data)
+    t.Commit()
+
+if not confirmed:
+    sys.exit(0)      # <-- rolls back the save above
+
+# ✅ CORRECT — wrap the remaining work in a conditional instead
+with Transaction(doc, '...') as t:
+    t.Start()
+    save(doc, data)
+    t.Commit()
+
+if confirmed:
+    # ... export logic ...
+    pass
+# script ends naturally — Transaction is safe
+```
+
+This applies to `sys.exit()` anywhere after a commit, not just at the top level.
+
+---
+
+### ❌ `from Autodesk.Revit.DB import DataStorage` fails inside a Python package
+
+**Symptom:** `ImportError: Cannot import name DataStorage` (or
+`AttributeError: 'Autodesk.Revit.DB' object has no attribute 'DataStorage'`)
+when the same import works fine in a flat module.
+
+**Cause:** IronPython's .NET namespace import resolution behaves differently
+inside a Python package (a directory with `__init__.py`). Many Revit API types
+import fine in flat modules but fail in package modules. `DataStorage` is the
+known problematic one; others may surface in future.
+
+**Fix:** Resolve the type via reflection in the flat module (where imports work)
+and pass it as a parameter to any package code that needs it:
+
+```python
+# In your flat storage.py — imports work here
+import clr
+from Autodesk.Revit.DB import Transaction as _Txn
+# Walk from a known-good type to the target type via assembly reflection
+_DataStorage = clr.GetClrType(_Txn).Assembly.GetType('Autodesk.Revit.DB.DataStorage')
+
+# Pass it into the package class — no import needed there
+_store = ExtensibleStorageManager(..., data_storage_class=_DataStorage)
+```
+
+If the type is in a different assembly than `Transaction`, scan all loaded
+assemblies. The `ExtensibleStorageManager` already handles a `None` result
+gracefully by falling back to `doc.ProjectInformation`.
+
+---
+
+### ⚠️ IronPython vs CPython — two runtimes in one extension
+
+`script.py` and all modules it imports run under **IronPython** inside Revit's
+process. Code that needs CPython packages (`openpyxl`, `win32com`, `PIL`) must
+run in a **separate CPython subprocess** via `subprocess.Popen`.
+
+The boundary is a temp JSON file: `script.py` serialises all Revit data to JSON,
+hands it to `worker.py` (the CPython entry point), and reads back success/failure.
+
+Never import CPython-only packages directly in `script.py` or any lib module —
+they will fail silently or with confusing errors under IronPython.
