@@ -15,7 +15,7 @@ import tempfile
 import subprocess
 
 from pyrevit import forms, revit
-from Autodesk.Revit.DB import Transaction  # noqa: E402
+from Autodesk.Revit.DB import Transaction
 
 # ── Add tool lib folder to path ───────────────────────────────────────────────
 _EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -24,9 +24,7 @@ if _EXT_LIB not in sys.path:
     sys.path.insert(0, _EXT_LIB)
 
 from revit_reader import get_sheets_data, get_project_info, collect_issue_dates
-from storage      import (load_settings, save_settings,
-                          check_lock, acquire_lock, release_lock,
-                          get_current_user)
+from storage      import load_settings, save_settings, check_and_acquire_ownership
 from dialog       import ExportDialog
 
 # ── Find CPython ──────────────────────────────────────────────────────────────
@@ -92,29 +90,21 @@ issue_keys = collect_issue_dates(sheets_data)
 # ── Load saved settings ───────────────────────────────────────────────────────
 settings = load_settings(doc)
 
-# ── Check and acquire dialog lock ─────────────────────────────────────────────
-# In a workshared model, only one user should have the dialog open at a time
-# so that settings changes don't silently overwrite each other.
-# The lock is based on the last sync-to-central state — it is a soft advisory
-# lock, not a hard guarantee.  A 4-hour timeout prevents a crashed session
-# from blocking other users permanently.
-is_locked, locked_by = check_lock(doc)
-if is_locked and locked_by != get_current_user(doc):
+# ── Workshared ownership check ────────────────────────────────────────────────
+# In a workshared model, check out the settings DataStorage element from the
+# central server before opening the dialog.  If another user has it checked
+# out, Revit reports OwnedByOtherUser and we show a named warning.
+# Ownership is released when the current user next syncs to central — the
+# same contract as editing any other element in a workshared model.
+can_proceed, blocking_user = check_and_acquire_ownership(doc)
+if not can_proceed:
     forms.alert(
-        'The Export Register dialog is currently in use by:\n\n    {}\n\n'
-        'Please wait until they have finished and synced to central.'.format(locked_by),
-        title='Dialog in use', warn_icon=True)
+        'The Export Register dialog is currently in use by:\n\n'
+        '    {}\n\n'
+        'Their settings will be saved to the model when they sync to central.\n'
+        'Please wait until then before opening this dialog.'.format(blocking_user),
+        title='Settings element checked out', warn_icon=True)
     sys.exit(0)
-
-with Transaction(doc, 'LB Issue Register — open dialog') as _t:
-    _t.Start()
-    try:
-        acquire_lock(doc)
-        _t.Commit()
-    except Exception:
-        _t.RollBack()
-        # Lock acquisition failed — proceed anyway rather than blocking the user.
-        # The settings save at close will still work.
 
 # ── Settings dialog ───────────────────────────────────────────────────────────
 all_packages = sorted(set(s['sheet_type'] for s in sheets_data))
@@ -131,14 +121,14 @@ dlg = ExportDialog(issue_keys, settings, all_packages=all_packages,
                    project_info=project_info, revision_index=revision_index)
 confirmed, updated_settings = dlg.show()
 
-# ── Save settings and release lock — always, regardless of export or cancel ───
-# Saving on cancel lets users update recipients / distribution codes without
-# having to run a full export.
+# ── Save settings — always, whether the user exported or just cancelled ───────
+# Saving on cancel lets users update recipients or distribution codes without
+# running a full export.  The DataStorage element remains checked out (owned
+# by the current user) until the next sync-to-central.
 with Transaction(doc, 'LB Issue Register — save settings') as _t:
     _t.Start()
     try:
         save_settings(doc, updated_settings)
-        release_lock(doc)
         _t.Commit()
     except Exception:
         _t.RollBack()

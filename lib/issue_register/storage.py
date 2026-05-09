@@ -8,34 +8,28 @@ used so that the plugin works identically on local network drives and on
 BIM 360 / Autodesk Construction Cloud, where there is no local file path
 for a sidecar approach.
 
-Workshared locking
-------------------
-A second DataStorage element (separate schema) acts as a soft lock so that
-only one user has the export dialog open at a time.  The lock is written
-when the dialog opens and cleared when it closes (cancel or export).
-Because Revit worksharing is sync-based, the lock is only as current as the
-last sync-to-central.  A staleness timeout of _LOCK_TIMEOUT_HOURS prevents
-a crashed session from permanently blocking other users.
+Workshared ownership
+--------------------
+The settings DataStorage element acts as the natural lock.  Before showing
+the dialog, the plugin calls WorksharingUtils.CheckoutElements() to reserve
+it from the central server.  If another user already owns it, Revit returns
+CheckoutStatus.OwnedByOtherUser and we show a message naming them.
+
+Ownership is released when the current user syncs-to-central, which is the
+standard Revit worksharing contract — the same mechanism that prevents two
+people from editing the same wall simultaneously.
 """
 
 import copy
 import json
-import time
+
 
 # ── Settings schema ───────────────────────────────────────────────────────────
-# Fixed GUIDs — do NOT change after first deployment.
-_SCHEMA_GUID    = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061'
-_SCHEMA_NAME    = 'LBIssueRegisterSettings'
-_FIELD_NAME     = 'SettingsJson'
-_STORAGE_NAME   = 'LBIssueRegisterStorage'
-
-# ── Lock schema ───────────────────────────────────────────────────────────────
-_LOCK_GUID      = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5062'
-_LOCK_SCHEMA    = 'LBIssueRegisterLock'
-_LOCK_FIELD_WHO = 'LockedBy'
-_LOCK_FIELD_AT  = 'LockedAt'
-_LOCK_EL_NAME   = 'LBIssueRegisterLock'
-_LOCK_TIMEOUT_HOURS = 4
+# Fixed GUID — do NOT change after first deployment.
+_SCHEMA_GUID   = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061'
+_SCHEMA_NAME   = 'LBIssueRegisterSettings'
+_FIELD_NAME    = 'SettingsJson'
+_STORAGE_NAME  = 'LBIssueRegisterStorage'
 
 _DEFAULT_SETTINGS = {
     'recipients': [
@@ -50,36 +44,34 @@ _DEFAULT_SETTINGS = {
 }
 
 
-# ── Shared Extensible Storage helpers ─────────────────────────────────────────
+# ── Extensible Storage helpers ────────────────────────────────────────────────
 
-def _make_schema(guid_str, schema_name, fields):
-    """Get or create an ES schema.  fields is a list of (name, type_str) pairs."""
+def _get_or_create_schema():
     from Autodesk.Revit.DB.ExtensibleStorage import (  # noqa: PLC0415
         Schema, SchemaBuilder, AccessLevel,
     )
     import System  # noqa: PLC0415
 
-    guid = System.Guid(guid_str)
+    guid = System.Guid(_SCHEMA_GUID)
     existing = Schema.Lookup(guid)
     if existing:
         return existing
 
     builder = SchemaBuilder(guid)
-    builder.SetSchemaName(schema_name)
+    builder.SetSchemaName(_SCHEMA_NAME)
     builder.SetReadAccessLevel(AccessLevel.Public)
     builder.SetWriteAccessLevel(AccessLevel.Public)
-    for field_name, _ in fields:
-        builder.AddSimpleField(field_name, System.String)
+    builder.AddSimpleField(_FIELD_NAME, System.String)
     return builder.Finish()
 
 
-def _find_ds(doc, guid_str):
-    """Return the DataStorage element that carries a given schema GUID, or None."""
+def _find_storage_element(doc):
+    """Return the settings DataStorage element, or None if it doesn't exist yet."""
     from Autodesk.Revit.DB import FilteredElementCollector, DataStorage  # noqa: PLC0415
     from Autodesk.Revit.DB.ExtensibleStorage import Schema               # noqa: PLC0415
     import System                                                         # noqa: PLC0415
 
-    schema = Schema.Lookup(System.Guid(guid_str))
+    schema = Schema.Lookup(System.Guid(_SCHEMA_GUID))
     if schema is None:
         return None
     for ds in FilteredElementCollector(doc).OfClass(DataStorage):
@@ -88,16 +80,85 @@ def _find_ds(doc, guid_str):
     return None
 
 
-# ── Settings storage ──────────────────────────────────────────────────────────
+def _element_id_value(eid):
+    """Return the integer value of an ElementId (compatible with Revit 2024+)."""
+    return getattr(eid, 'Value', None) or getattr(eid, 'IntegerValue', None)
 
-def _settings_schema():
-    return _make_schema(_SCHEMA_GUID, _SCHEMA_NAME, [(_FIELD_NAME, 'String')])
 
+# ── Worksharing ownership ─────────────────────────────────────────────────────
+
+def check_and_acquire_ownership(doc):
+    """
+    For workshared models, check whether the settings DataStorage element is
+    already owned by another user and, if not, explicitly check it out from
+    the central server using WorksharingUtils.CheckoutElements.
+
+    Returns (can_proceed: bool, owner_name: str).
+
+    - (True,  '')        — not workshared, element doesn't exist yet, or
+                           successfully checked out for the current user.
+    - (False, 'username') — element is owned by 'username'; caller should
+                            show a message and abort.
+
+    Ownership is released when the current user next syncs to central, which
+    is the standard Revit worksharing contract.
+    """
+    if not doc.IsWorkshared:
+        return True, ''
+
+    ds = _find_storage_element(doc)
+    if ds is None:
+        # First use — the element will be created during the save Transaction.
+        # No one else can own an element that doesn't exist yet.
+        return True, ''
+
+    try:
+        from Autodesk.Revit.DB import WorksharingUtils, CheckoutStatus  # noqa: PLC0415
+        from System.Collections.Generic import List                      # noqa: PLC0415
+        from Autodesk.Revit.DB import ElementId                         # noqa: PLC0415
+
+        # Fast local check based on last-sync state.
+        status = WorksharingUtils.GetCheckoutStatus(doc, ds.Id)
+        if status == CheckoutStatus.OwnedByOtherUser:
+            return False, _get_owner_name(doc, ds.Id)
+
+        # If not already owned by us, ask the central server to reserve it.
+        if status != CheckoutStatus.OwnedByCurrentUser:
+            ids = List[ElementId]()
+            ids.Add(ds.Id)
+            checked_out = WorksharingUtils.CheckoutElements(doc, ids)
+            checked_values = set(
+                _element_id_value(eid) for eid in checked_out
+            )
+            if _element_id_value(ds.Id) not in checked_values:
+                # Central server reported it is owned by someone else.
+                return False, _get_owner_name(doc, ds.Id)
+
+    except Exception as exc:
+        # Network error, unsupported API, or non-workshared cloud model variant.
+        # Proceed — the save Transaction will fail with a Revit-level error if
+        # there is a genuine conflict, which is still safe.
+        print('LB Issue Register — ownership check error: {}'.format(exc))
+
+    return True, ''
+
+
+def _get_owner_name(doc, element_id):
+    """Return the Revit username of whoever currently owns an element."""
+    try:
+        from Autodesk.Revit.DB import WorksharingUtils  # noqa: PLC0415
+        info = WorksharingUtils.GetWorksharingTooltipInfo(doc, element_id)
+        return info.Owner or 'another user'
+    except Exception:
+        return 'another user'
+
+
+# ── Settings read / write ─────────────────────────────────────────────────────
 
 def _load_extensible(doc):
     try:
-        schema = _settings_schema()
-        ds = _find_ds(doc, _SCHEMA_GUID)
+        schema = _get_or_create_schema()
+        ds = _find_storage_element(doc)
         if ds is None:
             return None
         import System as _Sys  # noqa: PLC0415
@@ -114,8 +175,8 @@ def _save_extensible(doc, settings):
     from Autodesk.Revit.DB.ExtensibleStorage import Entity       # noqa: PLC0415
     import System as _Sys                                         # noqa: PLC0415
 
-    schema = _settings_schema()
-    ds = _find_ds(doc, _SCHEMA_GUID)
+    schema = _get_or_create_schema()
+    ds = _find_storage_element(doc)
     if ds is None:
         ds = DataStorage.Create(doc)
         ds.Name = _STORAGE_NAME
@@ -123,105 +184,6 @@ def _save_extensible(doc, settings):
     entity = Entity(schema)
     entity.Set[_Sys.String](_FIELD_NAME, json.dumps(settings, ensure_ascii=False))
     ds.SetEntity(entity)
-
-
-# ── Lock storage ──────────────────────────────────────────────────────────────
-
-def _lock_schema():
-    return _make_schema(_LOCK_GUID, _LOCK_SCHEMA,
-                        [(_LOCK_FIELD_WHO, 'String'), (_LOCK_FIELD_AT, 'String')])
-
-
-def get_current_user(doc):
-    """Return the Revit application username for the current session."""
-    try:
-        return doc.Application.Username or 'Unknown user'
-    except Exception:
-        return 'Unknown user'
-
-
-def check_lock(doc):
-    """
-    Read the current lock state from Extensible Storage.
-
-    Returns (is_locked, locked_by_username).  A lock older than
-    _LOCK_TIMEOUT_HOURS is treated as stale and ignored.
-    Only meaningful on workshared models; always returns (False, '') otherwise.
-    """
-    try:
-        if not doc.IsWorkshared:
-            return False, ''
-        schema = _lock_schema()
-        ds = _find_ds(doc, _LOCK_GUID)
-        if ds is None:
-            return False, ''
-        import System as _Sys  # noqa: PLC0415
-        entity    = ds.GetEntity(schema)
-        locked_by = entity.Get[_Sys.String](_LOCK_FIELD_WHO) or ''
-        locked_at = entity.Get[_Sys.String](_LOCK_FIELD_AT)  or ''
-        if not locked_by:
-            return False, ''
-        # Staleness check — locked_at is stored as a Unix timestamp string
-        if locked_at:
-            try:
-                elapsed_hours = (time.time() - float(locked_at)) / 3600.0
-                if elapsed_hours > _LOCK_TIMEOUT_HOURS:
-                    return False, ''
-            except (ValueError, TypeError):
-                pass
-        return True, locked_by
-    except Exception as exc:
-        print('LB Issue Register — lock check error: {}'.format(exc))
-        return False, ''
-
-
-def acquire_lock(doc):
-    """
-    Write the current user's name and a timestamp into the lock element.
-    Caller must be inside an open Transaction.
-    Does nothing on non-workshared models.
-    """
-    try:
-        if not doc.IsWorkshared:
-            return
-        from Autodesk.Revit.DB import DataStorage              # noqa: PLC0415
-        from Autodesk.Revit.DB.ExtensibleStorage import Entity # noqa: PLC0415
-        import System as _Sys                                   # noqa: PLC0415
-
-        schema = _lock_schema()
-        ds = _find_ds(doc, _LOCK_GUID)
-        if ds is None:
-            ds = DataStorage.Create(doc)
-            ds.Name = _LOCK_EL_NAME
-
-        entity = Entity(schema)
-        entity.Set[_Sys.String](_LOCK_FIELD_WHO, get_current_user(doc))
-        entity.Set[_Sys.String](_LOCK_FIELD_AT,  str(time.time()))
-        ds.SetEntity(entity)
-    except Exception as exc:
-        print('LB Issue Register — lock acquire error: {}'.format(exc))
-
-
-def release_lock(doc):
-    """
-    Clear the lock.  Caller must be inside an open Transaction.
-    Does nothing on non-workshared models or if no lock element exists.
-    """
-    try:
-        if not doc.IsWorkshared:
-            return
-        schema = _lock_schema()
-        ds = _find_ds(doc, _LOCK_GUID)
-        if ds is None:
-            return
-        from Autodesk.Revit.DB.ExtensibleStorage import Entity  # noqa: PLC0415
-        import System as _Sys                                     # noqa: PLC0415
-        entity = Entity(schema)
-        entity.Set[_Sys.String](_LOCK_FIELD_WHO, '')
-        entity.Set[_Sys.String](_LOCK_FIELD_AT,  '')
-        ds.SetEntity(entity)
-    except Exception as exc:
-        print('LB Issue Register — lock release error: {}'.format(exc))
 
 
 # ── Merge helper ──────────────────────────────────────────────────────────────
@@ -257,5 +219,7 @@ def save_settings(doc, settings):
     """
     Persist settings to Extensible Storage.
     Must be called inside an open Revit Transaction.
+    The element remains checked out (owned by the current user) until the
+    next sync-to-central, which is the intended worksharing behaviour.
     """
     _save_extensible(doc, settings)
