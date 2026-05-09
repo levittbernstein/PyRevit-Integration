@@ -136,86 +136,84 @@ with Transaction(doc, 'LB Issue Register — save settings') as _t:
             'Settings could not be saved to the model.\n\n' + traceback.format_exc(),
             title='Save error', warn_icon=True)
 
-if not confirmed:
-    sys.exit(0)
+# ── Export (only when user confirmed) ────────────────────────────────────────
+# Do NOT use sys.exit(0) on the cancel path — pyRevit's cleanup on SystemExit
+# rolls back recent transactions, which would undo the settings save above.
+# Instead, wrap the export block in a conditional and let the script end
+# naturally on cancel.
+if confirmed:
+    # ── Filter excluded drawing packages ─────────────────────────────────────
+    excluded = set(updated_settings.get('excluded_packages', []))
+    if excluded:
+        sheets_data = [s for s in sheets_data if s['sheet_type'] not in excluded]
 
-# ── Filter excluded drawing packages ─────────────────────────────────────────
-excluded = set(updated_settings.get('excluded_packages', []))
-if excluded:
-    sheets_data = [s for s in sheets_data if s['sheet_type'] not in excluded]
+    if not sheets_data:
+        forms.alert('All drawing packages are excluded. Nothing to export.',
+                    title='No packages', warn_icon=True)
+    else:
+        # ── Choose output folder ──────────────────────────────────────────────
+        output_folder = forms.pick_folder(title='Select output folder for register files')
+        if output_folder:
+            proj_num = project_info.get('project_number', 'PROJECT')
 
-if not sheets_data:
-    forms.alert('All drawing packages are excluded. Nothing to export.',
-                title='No packages', warn_icon=True)
-    sys.exit(0)
+            _reg_date = updated_settings.get('register_issue_date', '').strip()
+            _date_prefix = ''
+            if _reg_date:
+                import datetime as _dt
+                for _fmt in ('%d/%m/%Y', '%d/%m/%y', '%d.%m.%Y', '%d.%m.%y', '%Y-%m-%d'):
+                    try:
+                        _date_prefix = _dt.datetime.strptime(_reg_date, _fmt).strftime('%y%m%d') + '_'
+                        break
+                    except ValueError:
+                        pass
 
-# ── Choose output folder ──────────────────────────────────────────────────────
-output_folder = forms.pick_folder(title='Select output folder for register files')
-if not output_folder:
-    sys.exit(0)
+            _reg_rev = updated_settings.get('register_revision', '').strip()
+            _rev_suffix = ('_' + ''.join(c for c in _reg_rev if c.isalnum())) if _reg_rev else ''
 
-proj_num = project_info.get('project_number', 'PROJECT')
+            _stem     = '{}{}-LB-Issue-Register{}'.format(_date_prefix, proj_num, _rev_suffix)
+            xlsx_path = os.path.join(output_folder, _stem + '.xlsx')
+            pdf_path  = os.path.join(output_folder, _stem + '.pdf')
 
-_reg_date = updated_settings.get('register_issue_date', '').strip()
-_date_prefix = ''
-if _reg_date:
-    import datetime as _dt
-    for _fmt in ('%d/%m/%Y', '%d/%m/%y', '%d.%m.%Y', '%d.%m.%y', '%Y-%m-%d'):
-        try:
-            _date_prefix = _dt.datetime.strptime(_reg_date, _fmt).strftime('%y%m%d') + '_'
-            break
-        except ValueError:
-            pass
+            # ── Build Excel + PDF via CPython subprocess ──────────────────────
+            payload = {
+                'sheets_data':   sheets_data,
+                'issue_keys':    [list(k) for k in issue_keys],
+                'settings':      updated_settings,
+                'project_info':  project_info,
+                'xlsx_path':     xlsx_path,
+                'pdf_path':      pdf_path,
+                'lib_path':      _EXT_LIB,
+            }
 
-_reg_rev = updated_settings.get('register_revision', '').strip()
-_rev_suffix = ('_' + ''.join(c for c in _reg_rev if c.isalnum())) if _reg_rev else ''
+            import io as _io
+            tmp_fd, tmp_json_name = tempfile.mkstemp(suffix='.json')
+            os.close(tmp_fd)
+            try:
+                with _io.open(tmp_json_name, 'w', encoding='utf-8') as _fh:
+                    json.dump(payload, _fh, ensure_ascii=False)
 
-_stem     = '{}{}-LB-Issue-Register{}'.format(_date_prefix, proj_num, _rev_suffix)
-xlsx_path = os.path.join(output_folder, _stem + '.xlsx')
-pdf_path  = os.path.join(output_folder, _stem + '.pdf')
+                worker_py = os.path.join(_EXT_LIB, 'worker.py')
+                result = subprocess.Popen(
+                    [_cpython, worker_py, tmp_json_name],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                stdout_b, stderr_b = result.communicate()
+                stdout = stdout_b.decode('utf-8', errors='replace').strip()
+                stderr = stderr_b.decode('utf-8', errors='replace').strip()
+            finally:
+                try:
+                    os.unlink(tmp_json_name)
+                except Exception:
+                    pass
 
-# ── Build Excel + PDF via CPython subprocess ──────────────────────────────────
-payload = {
-    'sheets_data':   sheets_data,
-    'issue_keys':    [list(k) for k in issue_keys],
-    'settings':      updated_settings,
-    'project_info':  project_info,
-    'xlsx_path':     xlsx_path,
-    'pdf_path':      pdf_path,
-    'lib_path':      _EXT_LIB,
-}
-
-import io as _io
-tmp_fd, tmp_json_name = tempfile.mkstemp(suffix='.json')
-os.close(tmp_fd)
-try:
-    with _io.open(tmp_json_name, 'w', encoding='utf-8') as _fh:
-        json.dump(payload, _fh, ensure_ascii=False)
-
-    worker_py = os.path.join(_EXT_LIB, 'worker.py')
-    result = subprocess.Popen(
-        [_cpython, worker_py, tmp_json_name],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    stdout_b, stderr_b = result.communicate()
-    stdout = stdout_b.decode('utf-8', errors='replace').strip()
-    stderr = stderr_b.decode('utf-8', errors='replace').strip()
-finally:
-    try:
-        os.unlink(tmp_json_name)
-    except Exception:
-        pass
-
-if result.returncode != 0 or stdout.startswith('ERROR'):
-    detail = stdout or stderr
-    forms.alert(
-        'Export failed:\n\n' + detail,
-        title='Export error', warn_icon=True)
-    sys.exit(0)
-
-# ── Done ──────────────────────────────────────────────────────────────────────
-forms.alert(
-    'Export complete!\n\nExcel: {}\nPDF:   {}'.format(xlsx_path, pdf_path),
-    title='LB Issue Register',
-)
+            if result.returncode != 0 or stdout.startswith('ERROR'):
+                detail = stdout or stderr
+                forms.alert(
+                    'Export failed:\n\n' + detail,
+                    title='Export error', warn_icon=True)
+            else:
+                forms.alert(
+                    'Export complete!\n\nExcel: {}\nPDF:   {}'.format(xlsx_path, pdf_path),
+                    title='LB Issue Register',
+                )
