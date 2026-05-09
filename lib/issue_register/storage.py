@@ -1,33 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Per-project persistent settings.
+Per-project persistent settings using Revit Extensible Storage.
 
-Primary storage: JSON sidecar file next to the .rvt
-  Path: <same folder as .rvt>/<rvt_name>.lb-settings.json
-  Works across users on a shared network drive.
+Extensible Storage lives inside the .rvt file and propagates to other users
+through the normal worksharing sync cycle.  It is the only storage mechanism
+used so that the plugin works identically on local network drives and on
+BIM 360 / Autodesk Construction Cloud, where there is no local file path
+for a sidecar approach.
 
-Fallback: Revit Extensible Storage
-  Saved inside the .rvt file; requires the model to be saved to persist.
+Workshared locking
+------------------
+A second DataStorage element (separate schema) acts as a soft lock so that
+only one user has the export dialog open at a time.  The lock is written
+when the dialog opens and cleared when it closes (cancel or export).
+Because Revit worksharing is sync-based, the lock is only as current as the
+last sync-to-central.  A staleness timeout of _LOCK_TIMEOUT_HOURS prevents
+a crashed session from permanently blocking other users.
 """
 
-import os
-import io
-import json
 import copy
+import json
+import time
 
-# Fixed GUID — do NOT change after first deployment
-_SCHEMA_GUID   = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061'
-_SCHEMA_NAME   = 'LBIssueRegisterSettings'
-_FIELD_NAME    = 'SettingsJson'
-_STORAGE_NAME  = 'LBIssueRegisterStorage'
+# ── Settings schema ───────────────────────────────────────────────────────────
+# Fixed GUIDs — do NOT change after first deployment.
+_SCHEMA_GUID    = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061'
+_SCHEMA_NAME    = 'LBIssueRegisterSettings'
+_FIELD_NAME     = 'SettingsJson'
+_STORAGE_NAME   = 'LBIssueRegisterStorage'
+
+# ── Lock schema ───────────────────────────────────────────────────────────────
+_LOCK_GUID      = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5062'
+_LOCK_SCHEMA    = 'LBIssueRegisterLock'
+_LOCK_FIELD_WHO = 'LockedBy'
+_LOCK_FIELD_AT  = 'LockedAt'
+_LOCK_EL_NAME   = 'LBIssueRegisterLock'
+_LOCK_TIMEOUT_HOURS = 4
 
 _DEFAULT_SETTINGS = {
-    'title_block': {
-        'subject':      '',
-        'drawn_by':     '',
-        'checked_by':   '',
-        'approved_by':  '',
-    },
     'recipients': [
         {'name': 'Client'},
         {'name': 'Contractor'},
@@ -40,114 +50,178 @@ _DEFAULT_SETTINGS = {
 }
 
 
-# ── Sidecar JSON helpers ──────────────────────────────────────────────────────
+# ── Shared Extensible Storage helpers ─────────────────────────────────────────
 
-def _sidecar_path(doc):
-    """Return path to the JSON sidecar file, or None if the model is unsaved."""
-    rvt_path = doc.PathName
-    if not rvt_path:
-        return None
-    return os.path.splitext(rvt_path)[0] + '.lb-settings.json'
-
-
-def _load_sidecar(doc):
-    path = _sidecar_path(doc)
-    if not path or not os.path.exists(path):
-        return None
-    try:
-        with io.open(path, 'r', encoding='utf-8') as fh:
-            return json.loads(fh.read())
-    except Exception as exc:
-        print('LB Issue Register — could not read sidecar: {}'.format(exc))
-        return None
-
-
-def _save_sidecar(doc, settings):
-    path = _sidecar_path(doc)
-    if not path:
-        return
-    try:
-        with io.open(path, 'w', encoding='utf-8') as fh:
-            fh.write(json.dumps(settings, ensure_ascii=False, indent=2))
-    except Exception as exc:
-        print('LB Issue Register — could not write sidecar: {}'.format(exc))
-
-
-# ── Extensible Storage helpers ────────────────────────────────────────────────
-
-def _get_or_create_schema():
+def _make_schema(guid_str, schema_name, fields):
+    """Get or create an ES schema.  fields is a list of (name, type_str) pairs."""
     from Autodesk.Revit.DB.ExtensibleStorage import (  # noqa: PLC0415
-        Schema, SchemaBuilder, AccessLevel
+        Schema, SchemaBuilder, AccessLevel,
     )
     import System  # noqa: PLC0415
 
-    guid = System.Guid(_SCHEMA_GUID)
+    guid = System.Guid(guid_str)
     existing = Schema.Lookup(guid)
     if existing:
         return existing
 
     builder = SchemaBuilder(guid)
-    builder.SetSchemaName(_SCHEMA_NAME)
+    builder.SetSchemaName(schema_name)
     builder.SetReadAccessLevel(AccessLevel.Public)
     builder.SetWriteAccessLevel(AccessLevel.Public)
-    fb = builder.AddSimpleField(_FIELD_NAME, System.String)
-    fb.SetDocumentation('JSON blob for LB Issue Register settings')
+    for field_name, _ in fields:
+        builder.AddSimpleField(field_name, System.String)
     return builder.Finish()
 
 
-def _find_storage_element(doc):
+def _find_ds(doc, guid_str):
+    """Return the DataStorage element that carries a given schema GUID, or None."""
     from Autodesk.Revit.DB import FilteredElementCollector, DataStorage  # noqa: PLC0415
     from Autodesk.Revit.DB.ExtensibleStorage import Schema               # noqa: PLC0415
     import System                                                         # noqa: PLC0415
 
-    guid   = System.Guid(_SCHEMA_GUID)
-    schema = Schema.Lookup(guid)
+    schema = Schema.Lookup(System.Guid(guid_str))
     if schema is None:
         return None
-
     for ds in FilteredElementCollector(doc).OfClass(DataStorage):
-        entity = ds.GetEntity(schema)
-        if entity.IsValid():
+        if ds.GetEntity(schema).IsValid():
             return ds
     return None
 
 
+# ── Settings storage ──────────────────────────────────────────────────────────
+
+def _settings_schema():
+    return _make_schema(_SCHEMA_GUID, _SCHEMA_NAME, [(_FIELD_NAME, 'String')])
+
+
 def _load_extensible(doc):
     try:
-        schema = _get_or_create_schema()
-        ds     = _find_storage_element(doc)
+        schema = _settings_schema()
+        ds = _find_ds(doc, _SCHEMA_GUID)
         if ds is None:
             return None
-        entity   = ds.GetEntity(schema)
         import System as _Sys  # noqa: PLC0415
-        json_str = entity.Get[_Sys.String](_FIELD_NAME)
-        if not json_str:
-            return None
-        return json.loads(json_str)
+        json_str = ds.GetEntity(schema).Get[_Sys.String](_FIELD_NAME)
+        return json.loads(json_str) if json_str else None
     except Exception as exc:
-        print('LB Issue Register — extensible storage read error: {}'.format(exc))
+        print('LB Issue Register — settings read error: {}'.format(exc))
         return None
 
 
 def _save_extensible(doc, settings):
+    """Write settings JSON.  Caller must be inside an open Transaction."""
     from Autodesk.Revit.DB import DataStorage                    # noqa: PLC0415
     from Autodesk.Revit.DB.ExtensibleStorage import Entity       # noqa: PLC0415
     import System as _Sys                                         # noqa: PLC0415
 
+    schema = _settings_schema()
+    ds = _find_ds(doc, _SCHEMA_GUID)
+    if ds is None:
+        ds = DataStorage.Create(doc)
+        ds.Name = _STORAGE_NAME
+
+    entity = Entity(schema)
+    entity.Set[_Sys.String](_FIELD_NAME, json.dumps(settings, ensure_ascii=False))
+    ds.SetEntity(entity)
+
+
+# ── Lock storage ──────────────────────────────────────────────────────────────
+
+def _lock_schema():
+    return _make_schema(_LOCK_GUID, _LOCK_SCHEMA,
+                        [(_LOCK_FIELD_WHO, 'String'), (_LOCK_FIELD_AT, 'String')])
+
+
+def get_current_user(doc):
+    """Return the Revit application username for the current session."""
     try:
-        schema = _get_or_create_schema()
-        ds     = _find_storage_element(doc)
+        return doc.Application.Username or 'Unknown user'
+    except Exception:
+        return 'Unknown user'
+
+
+def check_lock(doc):
+    """
+    Read the current lock state from Extensible Storage.
+
+    Returns (is_locked, locked_by_username).  A lock older than
+    _LOCK_TIMEOUT_HOURS is treated as stale and ignored.
+    Only meaningful on workshared models; always returns (False, '') otherwise.
+    """
+    try:
+        if not doc.IsWorkshared:
+            return False, ''
+        schema = _lock_schema()
+        ds = _find_ds(doc, _LOCK_GUID)
         if ds is None:
-            ds      = DataStorage.Create(doc)
-            ds.Name = _STORAGE_NAME
+            return False, ''
+        import System as _Sys  # noqa: PLC0415
+        entity    = ds.GetEntity(schema)
+        locked_by = entity.Get[_Sys.String](_LOCK_FIELD_WHO) or ''
+        locked_at = entity.Get[_Sys.String](_LOCK_FIELD_AT)  or ''
+        if not locked_by:
+            return False, ''
+        # Staleness check — locked_at is stored as a Unix timestamp string
+        if locked_at:
+            try:
+                elapsed_hours = (time.time() - float(locked_at)) / 3600.0
+                if elapsed_hours > _LOCK_TIMEOUT_HOURS:
+                    return False, ''
+            except (ValueError, TypeError):
+                pass
+        return True, locked_by
+    except Exception as exc:
+        print('LB Issue Register — lock check error: {}'.format(exc))
+        return False, ''
+
+
+def acquire_lock(doc):
+    """
+    Write the current user's name and a timestamp into the lock element.
+    Caller must be inside an open Transaction.
+    Does nothing on non-workshared models.
+    """
+    try:
+        if not doc.IsWorkshared:
+            return
+        from Autodesk.Revit.DB import DataStorage              # noqa: PLC0415
+        from Autodesk.Revit.DB.ExtensibleStorage import Entity # noqa: PLC0415
+        import System as _Sys                                   # noqa: PLC0415
+
+        schema = _lock_schema()
+        ds = _find_ds(doc, _LOCK_GUID)
+        if ds is None:
+            ds = DataStorage.Create(doc)
+            ds.Name = _LOCK_EL_NAME
+
         entity = Entity(schema)
-        entity.Set[_Sys.String](_FIELD_NAME, json.dumps(settings, ensure_ascii=False))
+        entity.Set[_Sys.String](_LOCK_FIELD_WHO, get_current_user(doc))
+        entity.Set[_Sys.String](_LOCK_FIELD_AT,  str(time.time()))
         ds.SetEntity(entity)
     except Exception as exc:
-        import traceback
-        print('LB Issue Register — extensible storage write error: {}'.format(exc))
-        traceback.print_exc()
-        raise
+        print('LB Issue Register — lock acquire error: {}'.format(exc))
+
+
+def release_lock(doc):
+    """
+    Clear the lock.  Caller must be inside an open Transaction.
+    Does nothing on non-workshared models or if no lock element exists.
+    """
+    try:
+        if not doc.IsWorkshared:
+            return
+        schema = _lock_schema()
+        ds = _find_ds(doc, _LOCK_GUID)
+        if ds is None:
+            return
+        from Autodesk.Revit.DB.ExtensibleStorage import Entity  # noqa: PLC0415
+        import System as _Sys                                     # noqa: PLC0415
+        entity = Entity(schema)
+        entity.Set[_Sys.String](_LOCK_FIELD_WHO, '')
+        entity.Set[_Sys.String](_LOCK_FIELD_AT,  '')
+        ds.SetEntity(entity)
+    except Exception as exc:
+        print('LB Issue Register — lock release error: {}'.format(exc))
 
 
 # ── Merge helper ──────────────────────────────────────────────────────────────
@@ -157,7 +231,6 @@ def _merge_defaults(saved, defaults):
         if key not in saved:
             saved[key] = val
         elif key == 'recipients' and isinstance(val, list):
-            # Add any default recipients not already present (keeps custom ones too)
             existing = {r.get('name', '') for r in saved[key]}
             for r in val:
                 if r.get('name', '') not in existing:
@@ -172,32 +245,17 @@ def _merge_defaults(saved, defaults):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def load_settings(doc):
-    """
-    Load settings. Tries sidecar JSON first (cross-user), then extensible storage.
-    Returns defaults if neither has data.
-    """
+    """Load settings from Extensible Storage, falling back to defaults."""
     defaults = copy.deepcopy(_DEFAULT_SETTINGS)
-
-    # Primary: sidecar JSON (works for all users with file access)
-    saved = _load_sidecar(doc)
-    if saved is not None:
-        return _merge_defaults(saved, defaults)
-
-    # Fallback: extensible storage (single-user, requires model save to persist)
     saved = _load_extensible(doc)
     if saved is not None:
         return _merge_defaults(saved, defaults)
-
     return defaults
 
 
 def save_settings(doc, settings):
     """
-    Persist settings. Writes sidecar JSON (primary) and extensible storage (backup).
-    Must be called inside an open Revit Transaction for the extensible storage write.
+    Persist settings to Extensible Storage.
+    Must be called inside an open Revit Transaction.
     """
-    # Primary: sidecar JSON — always attempt regardless of transaction state
-    _save_sidecar(doc, settings)
-
-    # Backup: extensible storage — requires an open Transaction (caller's responsibility)
     _save_extensible(doc, settings)

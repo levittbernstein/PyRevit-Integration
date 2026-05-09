@@ -15,6 +15,7 @@ import tempfile
 import subprocess
 
 from pyrevit import forms, revit
+from Autodesk.Revit.DB import Transaction  # noqa: E402
 
 # ── Add tool lib folder to path ───────────────────────────────────────────────
 _EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -23,7 +24,9 @@ if _EXT_LIB not in sys.path:
     sys.path.insert(0, _EXT_LIB)
 
 from revit_reader import get_sheets_data, get_project_info, collect_issue_dates
-from storage      import load_settings, save_settings
+from storage      import (load_settings, save_settings,
+                          check_lock, acquire_lock, release_lock,
+                          get_current_user)
 from dialog       import ExportDialog
 
 # ── Find CPython ──────────────────────────────────────────────────────────────
@@ -36,7 +39,6 @@ def _find_cpython():
             appdata, root, 'bin', 'cengines', engine_name, 'python.exe')
         if os.path.exists(candidate):
             return candidate
-    # Fallback: glob for any CPY* engine in either root
     import glob
     for root in search_roots:
         pattern = os.path.join(appdata, root, 'bin', 'cengines', 'CPY*', 'python.exe')
@@ -79,7 +81,6 @@ if not sheets_data:
                 title='No sheets', warn_icon=True)
     sys.exit(0)
 
-# Only include sheets that have been issued at least once
 sheets_data = [s for s in sheets_data if s.get('revisions')]
 if not sheets_data:
     forms.alert('No sheets have been issued yet.\n\nAdd at least one revision to a sheet first.',
@@ -91,11 +92,33 @@ issue_keys = collect_issue_dates(sheets_data)
 # ── Load saved settings ───────────────────────────────────────────────────────
 settings = load_settings(doc)
 
+# ── Check and acquire dialog lock ─────────────────────────────────────────────
+# In a workshared model, only one user should have the dialog open at a time
+# so that settings changes don't silently overwrite each other.
+# The lock is based on the last sync-to-central state — it is a soft advisory
+# lock, not a hard guarantee.  A 4-hour timeout prevents a crashed session
+# from blocking other users permanently.
+is_locked, locked_by = check_lock(doc)
+if is_locked and locked_by != get_current_user(doc):
+    forms.alert(
+        'The Export Register dialog is currently in use by:\n\n    {}\n\n'
+        'Please wait until they have finished and synced to central.'.format(locked_by),
+        title='Dialog in use', warn_icon=True)
+    sys.exit(0)
+
+with Transaction(doc, 'LB Issue Register — open dialog') as _t:
+    _t.Start()
+    try:
+        acquire_lock(doc)
+        _t.Commit()
+    except Exception:
+        _t.RollBack()
+        # Lock acquisition failed — proceed anyway rather than blocking the user.
+        # The settings save at close will still work.
+
 # ── Settings dialog ───────────────────────────────────────────────────────────
 all_packages = sorted(set(s['sheet_type'] for s in sheets_data))
 
-# Build a lookup: (date_str, issued_by) -> set of sheet_types that have a revision there.
-# Used by the dialog to show Uncontrolled Formats checkboxes only where data exists.
 revision_index = {}
 for _s in sheets_data:
     for _r in _s['revisions']:
@@ -107,6 +130,18 @@ for _s in sheets_data:
 dlg = ExportDialog(issue_keys, settings, all_packages=all_packages,
                    project_info=project_info, revision_index=revision_index)
 confirmed, updated_settings = dlg.show()
+
+# ── Save settings and release lock — always, regardless of export or cancel ───
+# Saving on cancel lets users update recipients / distribution codes without
+# having to run a full export.
+with Transaction(doc, 'LB Issue Register — save settings') as _t:
+    _t.Start()
+    try:
+        save_settings(doc, updated_settings)
+        release_lock(doc)
+        _t.Commit()
+    except Exception:
+        _t.RollBack()
 
 if not confirmed:
     sys.exit(0)
@@ -121,17 +156,6 @@ if not sheets_data:
                 title='No packages', warn_icon=True)
     sys.exit(0)
 
-# ── Save settings back to model ───────────────────────────────────────────────
-from Autodesk.Revit.DB import Transaction  # noqa: PLC0415, E402
-
-with Transaction(doc, 'LB Issue Register — save settings') as t:
-    t.Start()
-    try:
-        save_settings(doc, updated_settings)
-        t.Commit()
-    except Exception:
-        t.RollBack()
-
 # ── Choose output folder ──────────────────────────────────────────────────────
 output_folder = forms.pick_folder(title='Select output folder for register files')
 if not output_folder:
@@ -139,7 +163,6 @@ if not output_folder:
 
 proj_num = project_info.get('project_number', 'PROJECT')
 
-# Date prefix: parse register_issue_date → YYMMDD_
 _reg_date = updated_settings.get('register_issue_date', '').strip()
 _date_prefix = ''
 if _reg_date:
@@ -151,7 +174,6 @@ if _reg_date:
         except ValueError:
             pass
 
-# Revision suffix: _P01 etc. — strip any characters unsafe for filenames
 _reg_rev = updated_settings.get('register_revision', '').strip()
 _rev_suffix = ('_' + ''.join(c for c in _reg_rev if c.isalnum())) if _reg_rev else ''
 
@@ -160,10 +182,9 @@ xlsx_path = os.path.join(output_folder, _stem + '.xlsx')
 pdf_path  = os.path.join(output_folder, _stem + '.pdf')
 
 # ── Build Excel + PDF via CPython subprocess ──────────────────────────────────
-# Serialise all data to a temp JSON file
 payload = {
     'sheets_data':   sheets_data,
-    'issue_keys':    [list(k) for k in issue_keys],  # tuples → lists for JSON
+    'issue_keys':    [list(k) for k in issue_keys],
     'settings':      updated_settings,
     'project_info':  project_info,
     'xlsx_path':     xlsx_path,
