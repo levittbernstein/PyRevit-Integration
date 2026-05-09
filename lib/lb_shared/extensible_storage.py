@@ -66,13 +66,14 @@ class ExtensibleStorageManager(object):
         Defaults to ``'Data'``.
     """
 
-    def __init__(self, schema_guid, schema_name, json_field='Data', **kwargs):
-        # **kwargs absorbs legacy parameters (element_name, data_storage_class)
-        # so callers don't need to be updated immediately.
-        self._guid         = schema_guid
-        self._schema_name  = schema_name
-        self._field        = json_field
-        self._schema_cache = None  # populated on first _get_schema() call
+    def __init__(self, schema_guid, schema_name, element_name='LBStorage',
+                 json_field='Data', data_storage_class=None, **kwargs):
+        self._guid               = schema_guid
+        self._schema_name        = schema_name
+        self._element_name       = element_name
+        self._field              = json_field
+        self._data_storage_class = data_storage_class  # None → use ProjectInformation
+        self._schema_cache       = None
 
     # ── Schema ────────────────────────────────────────────────────────────────
 
@@ -102,11 +103,37 @@ class ExtensibleStorageManager(object):
     # ── Storage element ───────────────────────────────────────────────────────
 
     def _get_element(self, doc):
-        """Return the element used for storage (ProjectInformation)."""
+        """
+        Return the element that holds our Extensible Storage entity.
+
+        Preference: a dedicated DataStorage element (found via
+        ExtensibleStorageFilter).  This gives each plugin its own element
+        with independent worksharing ownership.
+
+        Fallback: doc.ProjectInformation — always present, but its
+        worksharing ownership is shared across all plugins.
+        """
+        if self._data_storage_class is not None:
+            # Try to find an existing dedicated DataStorage element.
+            from Autodesk.Revit.DB import FilteredElementCollector          # noqa: PLC0415
+            from Autodesk.Revit.DB.ExtensibleStorage import (               # noqa: PLC0415
+                Schema, ExtensibleStorageFilter,
+            )
+            import System                                                    # noqa: PLC0415
+            guid   = System.Guid(self._guid)
+            schema = Schema.Lookup(guid)
+            if schema is not None:
+                col = list(FilteredElementCollector(doc).WherePasses(
+                    ExtensibleStorageFilter(guid)))
+                if col:
+                    return col[0]
+            # Not found yet — will be created in save().
+            return None
+        # DataStorage unavailable — fall back to ProjectInformation.
         return doc.ProjectInformation
 
-    # kept for backwards-compat with any code that calls find_element directly
     def find_element(self, doc):
+        """Public alias kept for backwards compatibility."""
         return self._get_element(doc)
 
     # ── Read ──────────────────────────────────────────────────────────────────
@@ -119,6 +146,8 @@ class ExtensibleStorageManager(object):
         try:
             schema = self._get_schema()
             el     = self._get_element(doc)
+            if el is None:
+                return None  # no DataStorage element created yet
             import System as _Sys  # noqa: PLC0415
             entity = el.GetEntity(schema)
             if not entity.IsValid():
@@ -135,12 +164,18 @@ class ExtensibleStorageManager(object):
         """
         Persist *data* (any JSON-serialisable value, typically a dict).
         Must be called inside an open Revit Transaction.
+        Creates the DataStorage element on the first call (if available).
         """
         from Autodesk.Revit.DB.ExtensibleStorage import Entity  # noqa: PLC0415
         import System as _Sys                                    # noqa: PLC0415
 
         schema = self._get_schema()
         el     = self._get_element(doc)
+        if el is None:
+            # First save — create a dedicated DataStorage element.
+            el      = self._data_storage_class.Create(doc)
+            el.Name = self._element_name
+
         entity = Entity(schema)
         entity.Set[_Sys.String](self._field, json.dumps(data, ensure_ascii=False))
         el.SetEntity(entity)
@@ -158,6 +193,9 @@ class ExtensibleStorageManager(object):
             return True, ''
 
         el = self._get_element(doc)
+        if el is None:
+            # DataStorage element not yet created — no owner, safe to proceed.
+            return True, ''
 
         try:
             from Autodesk.Revit.DB import (                      # noqa: PLC0415

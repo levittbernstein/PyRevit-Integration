@@ -17,11 +17,26 @@ if _LIB_ROOT not in sys.path:
 
 from lb_shared.extensible_storage import ExtensibleStorageManager  # noqa: E402
 
+# ── Resolve DataStorage type ──────────────────────────────────────────────────
+# 'from Autodesk.Revit.DB import DataStorage' fails in IronPython in this
+# environment.  Instead we get Transaction (which does import) and walk to
+# DataStorage via its assembly — both types live in RevitAPI.dll.
+_DataStorage = None
+try:
+    import clr as _clr                                          # noqa: E402
+    from Autodesk.Revit.DB import Transaction as _Txn          # noqa: E402
+    _DataStorage = _clr.GetClrType(_Txn).Assembly.GetType(
+        'Autodesk.Revit.DB.DataStorage')
+except Exception as _e:
+    print('[LBIssueRegister] DataStorage lookup failed: {}'.format(_e))
+
 # ── Storage instance — one per plugin, each with a unique GUID ───────────────
 _store = ExtensibleStorageManager(
-    schema_guid  = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061',  # fixed — do not change
-    schema_name  = 'LBIssueRegisterSettings',
-    json_field   = 'SettingsJson',
+    schema_guid        = '6F3A1B2C-4D5E-4F60-8A9B-1C2D3E4F5061',  # fixed — do not change
+    schema_name        = 'LBIssueRegisterSettings',
+    element_name       = 'LBIssueRegisterStorage',
+    json_field         = 'SettingsJson',
+    data_storage_class = _DataStorage,   # None → falls back to ProjectInformation
 )
 
 # ── Default settings ──────────────────────────────────────────────────────────
