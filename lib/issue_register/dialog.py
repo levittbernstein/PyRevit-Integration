@@ -355,7 +355,7 @@ class ExportDialog(object):
         self._suit_boxes = {}
 
         n_issues = len(self._issue_keys)
-        _options  = ['', 'S01', 'S02', 'S03', 'S04', 'S05']
+        _options  = ['', 'S01', 'S02', 'S03', 'S04', 'S05', 'A', 'B']
 
         # Column definitions: col 0 = package name (160px), cols 1..n = issue dates (70px)
         cd = ColumnDefinition()
