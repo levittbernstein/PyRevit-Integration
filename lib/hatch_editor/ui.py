@@ -200,13 +200,6 @@ class HatchApp(tk.Tk):
             messagebox.showwarning("Export", "No elements to export.")
             return
 
-        default_scale = self._proj.get('_export_scale', 1.0 / 25.4)
-        d = ExportDialog(self, default_scale)
-        if d.result is None:
-            return
-        scale = d.result
-        self._proj['_export_scale'] = scale   # remember for next export
-
         name = self._proj.get('name', 'Untitled').replace(' ', '_')
         path = filedialog.asksaveasfilename(
             title="Export .pat",
@@ -217,12 +210,11 @@ class HatchApp(tk.Tk):
         if not path:
             return
         try:
-            export_pat(self._proj, path, scale=scale)
+            export_pat(self._proj, path)   # mm → inches handled internally
             messagebox.showinfo(
                 "Export complete",
                 f"Saved: {os.path.basename(path)}\n\n"
-                f"Import into Revit with Fill Pattern Scale = 1.0\n"
-                f"Export scale used: {scale}",
+                f"Import into Revit with Fill Pattern Scale = 1.0",
             )
         except Exception as ex:
             messagebox.showerror("Export failed", str(ex))
@@ -365,77 +357,4 @@ class TileSettingsDialog(tk.Toplevel):
             messagebox.showerror("Invalid input", "Please enter valid positive numbers.", parent=self)
             return
         self.result = (name, tw, th, grid)
-        self.destroy()
-
-
-# ------------------------------------------------------------------
-# Export scale dialog
-# ------------------------------------------------------------------
-
-class ExportDialog(tk.Toplevel):
-    """Ask for an export scale factor before writing the .pat file."""
-
-    PRESETS = [
-        ("0.03937 — inches/mm (Revit default)",  1.0 / 25.4),
-        ("1.0  — mm",                            1.0),
-        ("0.001 — metres",                       0.001),
-        ("0.00328 — feet (1/304.8)",             1.0 / 304.8),
-    ]
-
-    def __init__(self, parent, last_scale=1.0):
-        super().__init__(parent)
-        self.title("Export .pat — scale")
-        self.resizable(False, False)
-        self.grab_set()
-        self.result = None
-
-        pad = dict(padx=10, pady=4)
-
-        msg = (
-            "Revit MODEL hatches read .pat values in inches internally.\n"
-            "The default scale (1/25.4) converts your mm drawing to inches.\n\n"
-            "Import into Revit with Fill Pattern Scale = 1.0.\n"
-            "If the size is still wrong, measure one tile in Revit and\n"
-            "set scale = drawn_size_mm / displayed_size_mm."
-        )
-        ttk.Label(self, text=msg, justify='left').grid(
-            row=0, column=0, columnspan=2, sticky='w', **pad)
-
-        ttk.Label(self, text="Preset:").grid(row=1, column=0, sticky='w', **pad)
-        self._preset_var = tk.StringVar()
-        preset_labels = [p[0] for p in self.PRESETS]
-        cb = ttk.Combobox(self, textvariable=self._preset_var,
-                          values=preset_labels, state='readonly', width=32)
-        cb.grid(row=1, column=1, sticky='w', **pad)
-        cb.bind('<<ComboboxSelected>>', self._on_preset)
-
-        ttk.Label(self, text="Custom scale:").grid(row=2, column=0, sticky='w', **pad)
-        self._scale_entry = ttk.Entry(self, width=16)
-        self._scale_entry.insert(0, str(last_scale))
-        self._scale_entry.grid(row=2, column=1, sticky='w', **pad)
-
-        bf = ttk.Frame(self)
-        bf.grid(row=3, column=0, columnspan=2, pady=10)
-        ttk.Button(bf, text="Export", command=self._ok).pack(side='left', padx=6)
-        ttk.Button(bf, text="Cancel", command=self.destroy).pack(side='left', padx=6)
-
-        self.transient(parent)
-        self.wait_window()
-
-    def _on_preset(self, event=None):
-        label = self._preset_var.get()
-        for lbl, val in self.PRESETS:
-            if lbl == label:
-                self._scale_entry.delete(0, 'end')
-                self._scale_entry.insert(0, str(val))
-                break
-
-    def _ok(self):
-        try:
-            scale = float(self._scale_entry.get())
-            assert scale > 0
-        except Exception:
-            messagebox.showerror("Invalid scale", "Enter a positive number.", parent=self)
-            return
-        self.result = scale
         self.destroy()
