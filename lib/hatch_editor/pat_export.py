@@ -39,8 +39,10 @@ from .geometry import arc_to_polyline
 #    on a typical arc) while keeping dy healthy (≈20mm+), so the family stays
 #    one-dash-per-tile with no clutter.
 GRID_RES_MM   = 1.0        # export sub-grid resolution (mm)
-TARGET_SEG_MM = 4.0        # target arc chord length (mm) — visible dashes
-DY_FLOOR_FRAC = 0.06       # insurance floor; segments below fall back to steps
+# Revit appears to enforce a minimum rendered dash length (~8mm): dashes shorter
+# than that get lengthened, overshooting their chord and producing tangential
+# "spurs"/fans at arc vertices. Keep chords above that threshold.
+TARGET_SEG_MM = 10.0       # target arc chord length (mm) — above Revit's min dash
 _TOL          = 1e-5
 _MM_TO_IN     = 1.0 / 25.4
 
@@ -165,20 +167,19 @@ def _family_tiles(f, W, H):
 
 
 def _arc_segment_families(ix0, iy0, ix1, iy1, W, H, gw, gh):
-    """Arc segment → family, with a low-dy fallback to axis-aligned steps."""
+    """
+    Arc segment → its exact tiling family.
+
+    No L-shape fallback: decomposing a steep segment into H+V steps would
+    create a short (< Revit-min-dash) leg that Revit lengthens into a spur.
+    The direct family tiles to one dash per tile even at small dy; the worst
+    case for an unusually steep segment is a faint parallel echo, which is
+    far less objectionable than a spur.
+    """
     f = _grid_family(ix0, iy0, ix1, iy1, W, H, gw, gh)
-    if f is None:
+    if f is None or not _family_tiles(f, W, H):
         return []
-    dy_floor = min(W, H) * DY_FLOOR_FRAC
-    if f['dy'] >= dy_floor and _family_tiles(f, W, H):
-        return [f]
-    # Fallback: L-shape (horizontal then vertical) — always tiles, large dy.
-    out = []
-    for ff in (_grid_family(ix0, iy0, ix1, iy0, W, H, gw, gh),
-               _grid_family(ix1, iy0, ix1, iy1, W, H, gw, gh)):
-        if ff:
-            out.append(ff)
-    return out
+    return [f]
 
 
 def _grid_params(proj):
