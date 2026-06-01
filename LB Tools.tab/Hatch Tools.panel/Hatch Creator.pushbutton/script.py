@@ -21,32 +21,58 @@ _EXT_LIB = os.path.join(_EXT_ROOT, 'lib', 'hatch_editor')
 if _EXT_LIB not in sys.path:
     sys.path.insert(0, _EXT_LIB)
 
-# ── Find CPython ──────────────────────────────────────────────────────────────
-def _find_cpython():
-    appdata = os.environ.get('APPDATA', '')
-    search_roots = ['pyRevit-Master', 'pyRevit']
-    engine_name  = 'CPY3123'
-    for root in search_roots:
-        candidate = os.path.join(
-            appdata, root, 'bin', 'cengines', engine_name, 'python.exe')
-        if os.path.exists(candidate):
-            return candidate
-    for root in search_roots:
-        pattern = os.path.join(appdata, root, 'bin', 'cengines', 'CPY*', 'python.exe')
-        hits = glob.glob(pattern)
-        if hits:
-            return hits[0]
+# ── Find a Python with tkinter ────────────────────────────────────────────────
+def _has_tkinter(python_exe):
+    try:
+        r = subprocess.Popen(
+            [python_exe, '-c', 'import tkinter'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        r.communicate()
+        return r.returncode == 0
+    except Exception:
+        return False
+
+def _find_python_with_tkinter():
+    localappdata = os.environ.get('LOCALAPPDATA', '')
+    appdata      = os.environ.get('APPDATA', '')
+
+    # Prefer a full system Python install over pyRevit's minimal embed
+    candidates = []
+
+    # Standard user installs
+    candidates.append(os.path.join(localappdata, 'Python', 'bin', 'python.exe'))
+    for pat in [os.path.join(localappdata, 'Programs', 'Python', 'Python3*', 'python.exe'),
+                os.path.join(localappdata, 'Programs', 'Python', 'Python*', 'python.exe')]:
+        candidates.extend(glob.glob(pat))
+
+    # Conda
+    candidates.append(os.path.join(localappdata, 'miniconda3', 'python.exe'))
+    candidates.append(os.path.join(localappdata, 'anaconda3', 'python.exe'))
+    candidates.append(os.path.join(os.path.expanduser('~'), 'miniconda3', 'python.exe'))
+    candidates.append(os.path.join(os.path.expanduser('~'), 'anaconda3', 'python.exe'))
+
+    # System-wide
+    candidates.extend(glob.glob(r'C:\Python3*\python.exe'))
+    candidates.extend(glob.glob(r'C:\Program Files\Python3*\python.exe'))
+
+    # pyRevit bundled CPython (last resort — often missing tkinter)
+    for root in ['pyRevit-Master', 'pyRevit']:
+        candidates.extend(glob.glob(
+            os.path.join(appdata, root, 'bin', 'cengines', 'CPY*', 'python.exe')))
+
+    for exe in candidates:
+        if os.path.exists(exe) and _has_tkinter(exe):
+            return exe
     return None
 
-_cpython = _find_cpython()
+_cpython = _find_python_with_tkinter()
 if not _cpython:
     forms.alert(
-        'Cannot find pyRevit CPython.\n\n'
-        'Expected at:\n'
-        '  %APPDATA%\\pyRevit-Master\\bin\\cengines\\CPY3123\\python.exe\n'
-        '  %APPDATA%\\pyRevit\\bin\\cengines\\CPY3123\\python.exe\n\n'
-        'Check your pyRevit installation.',
-        title='CPython not found', warn_icon=True)
+        'Cannot find a Python installation with tkinter.\n\n'
+        'Please install Python from python.org (make sure to include tcl/tk).',
+        title='Python not found', warn_icon=True)
     sys.exit(0)
 
 # ── Launch the Hatch Creator as a fully detached subprocess ──────────────────
@@ -56,34 +82,5 @@ if not _cpython:
 # to flash and disappear.
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
 
-# ── Show diagnostic paths before doing anything ───────────────────────────────
-_info = [
-    'CPython:  ' + _cpython,
-    'exists:   ' + str(os.path.exists(_cpython)),
-    '',
-    'Launcher: ' + _launcher,
-    'exists:   ' + str(os.path.exists(_launcher)),
-    '',
-    'EXT_ROOT: ' + _EXT_ROOT,
-    'EXT_LIB:  ' + _EXT_LIB,
-]
-forms.alert('\n'.join(_info), title='Hatch Creator — diagnostics')
-
-# ── Run launcher blocking so we capture all output ───────────────────────────
-_proc = subprocess.Popen(
-    [_cpython, _launcher],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-)
-_out, _err = _proc.communicate()
-_out = _out.decode('utf-8', errors='replace').strip()
-_err = _err.decode('utf-8', errors='replace').strip()
-
-if _proc.returncode != 0 or _err:
-    forms.alert(
-        'Exit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}'.format(
-            _proc.returncode, _out or '(none)', _err or '(none)'),
-        title='Hatch Creator error', warn_icon=True)
-else:
-    forms.alert('Process exited cleanly (code 0) — app closed normally.',
-                title='Hatch Creator')
+# ── Launch as a detached process so it outlives the pyRevit script host ───────
+subprocess.Popen([_cpython, _launcher], creationflags=0x00000008 | 0x00000200)
