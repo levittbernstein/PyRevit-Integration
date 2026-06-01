@@ -5,7 +5,7 @@ from .geometry import arc_to_polyline
 # Use more arc segments so the H/V projection approximation is fine-grained.
 # Each segment is projected to horizontal or vertical (see below), so more
 # segments = smoother apparent curve.
-ARC_SEGMENTS = 128
+ARC_SEGMENTS = 8   # rough-polygon approximation — readable as a circle at arch scale
 
 
 # ── Straight-line entry ────────────────────────────────────────────────────────
@@ -62,56 +62,6 @@ def _line_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h):
     }
 
 
-# ── Arc segment → horizontal or vertical entry ────────────────────────────────
-
-def _arc_seg_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h):
-    """
-    Project a short arc segment onto its nearest axis (horizontal or vertical)
-    and return a 0° or 90° PAT entry.
-
-    Horizontal (0°) and vertical (90°) entries tile EXACTLY with zero positional
-    drift in both x and y directions — unlike arbitrary-angle entries which drift
-    in at least one axis for irrational angles, causing arc segments to appear at
-    wrong positions in adjacent tiles (the "scatter" problem).
-
-    The arc shape is preserved: with 128 sub-segments, the H/V projection
-    approximation is indistinguishable from a true curve at architectural scales.
-    """
-    adx = abs(x1 - x0)
-    ady = abs(y1 - y0)
-    mx  = (x0 + x1) * 0.5
-    my  = (y0 + y1) * 0.5
-
-    if adx >= ady:                        # project to horizontal (0°)
-        if adx < 1e-9:
-            return None
-        ox = min(x0, x1)
-        gap = -(tile_w - adx)
-        if gap >= 0:                      # segment fills or exceeds tile width
-            gap = 0.0
-        return {
-            'angle': 0.0,
-            'ox': ox, 'oy': my,
-            'dx': 0.0, 'dy': tile_h,
-            'dash': adx,
-            'gap': gap,
-        }
-    else:                                 # project to vertical (90°)
-        if ady < 1e-9:
-            return None
-        oy = min(y0, y1)
-        gap = -(tile_h - ady)
-        if gap >= 0:
-            gap = 0.0
-        return {
-            'angle': 90.0,
-            'ox': mx, 'oy': oy,
-            'dx': 0.0, 'dy': tile_w,
-            'dash': ady,
-            'gap': gap,
-        }
-
-
 # ── Element dispatcher ─────────────────────────────────────────────────────────
 
 def _element_to_pat_entries(el, tile_w, tile_h):
@@ -123,6 +73,11 @@ def _element_to_pat_entries(el, tile_w, tile_h):
         return [entry] if entry else []
 
     elif t in ('arc_cr', 'arc_3pt'):
+        # Approximate the arc as a polyline then export each segment using the
+        # same actual-angle entry function as straight lines.  With 8 segments
+        # the arc appears as a recognisable rough polygon at architectural scale.
+        # The y-axis is flipped (tile_h - y) so angles match Revit's y-up coord
+        # system; without this, arcs appear mirrored vertically.
         pts = arc_to_polyline(
             el['cx'], el['cy'], el['r'],
             el['a_start'], el['a_end'], el['ccw'],
@@ -130,8 +85,9 @@ def _element_to_pat_entries(el, tile_w, tile_h):
         )
         entries = []
         for i in range(len(pts) - 1):
-            entry = _arc_seg_to_pat_entry(
-                pts[i][0], pts[i][1], pts[i+1][0], pts[i+1][1], tile_w, tile_h)
+            x0, y0 = pts[i][0],   tile_h - pts[i][1]
+            x1, y1 = pts[i+1][0], tile_h - pts[i+1][1]
+            entry = _line_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h)
             if entry:
                 entries.append(entry)
         return entries

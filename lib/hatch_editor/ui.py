@@ -200,7 +200,8 @@ class HatchApp(tk.Tk):
             messagebox.showwarning("Export", "No elements to export.")
             return
 
-        d = ExportDialog(self, self._proj.get('_export_scale', 1.0))
+        default_scale = self._proj.get('_export_scale', 1.0 / 25.4)
+        d = ExportDialog(self, default_scale)
         if d.result is None:
             return
         scale = d.result
@@ -375,10 +376,10 @@ class ExportDialog(tk.Toplevel):
     """Ask for an export scale factor before writing the .pat file."""
 
     PRESETS = [
-        ("1.0  — mm (try this first)",        1.0),
-        ("0.001 — metres",                    0.001),
-        ("0.0394 — inches (1/25.4)",          1.0 / 25.4),
-        ("0.00328 — feet (1/304.8)",          1.0 / 304.8),
+        ("0.03937 — inches/mm (Revit default)",  1.0 / 25.4),
+        ("1.0  — mm",                            1.0),
+        ("0.001 — metres",                       0.001),
+        ("0.00328 — feet (1/304.8)",             1.0 / 304.8),
     ]
 
     def __init__(self, parent, last_scale=1.0):
@@ -391,10 +392,11 @@ class ExportDialog(tk.Toplevel):
         pad = dict(padx=10, pady=4)
 
         msg = (
-            "If the pattern appears the wrong size in Revit, adjust the\n"
-            "scale factor below.  Import with Fill Pattern Scale = 1.0.\n\n"
-            "Tip: start with 1.0 (mm).  If still wrong, measure one tile\n"
-            "in Revit and divide the drawn size (mm) by the displayed size."
+            "Revit MODEL hatches read .pat values in inches internally.\n"
+            "The default scale (1/25.4) converts your mm drawing to inches.\n\n"
+            "Import into Revit with Fill Pattern Scale = 1.0.\n"
+            "If the size is still wrong, measure one tile in Revit and\n"
+            "set scale = drawn_size_mm / displayed_size_mm."
         )
         ttk.Label(self, text=msg, justify='left').grid(
             row=0, column=0, columnspan=2, sticky='w', **pad)
