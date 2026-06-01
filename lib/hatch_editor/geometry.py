@@ -82,34 +82,3 @@ def arc_to_polyline(cx, cy, r, a_start_deg, a_end_deg, ccw=True, segments=32):
     return pts
 
 
-def polyline_to_pat_lines(pts, tile_w, tile_h):
-    """
-    Convert a polyline into a list of PAT line definitions.
-    Each segment becomes one dash-line entry.
-    Returns list of dicts: {angle, ox, oy, dx, dy, dash, gap}
-    """
-    entries = []
-    for i in range(len(pts) - 1):
-        x0, y0 = pts[i]
-        x1, y1 = pts[i + 1]
-        seg_len = dist((x0, y0), (x1, y1))
-        if seg_len < 1e-6:
-            continue
-
-        angle_rad = math.atan2(y1 - y0, x1 - x0)
-        angle_deg = math.degrees(angle_rad) % 360
-
-        # Revit .pat: perpendicular offset direction is 90° CCW from line angle
-        # We need dx (shift along line per tile row) and dy (perpendicular spacing)
-        # For individual segment lines we use a large dy so they don't repeat visibly
-        # within the tile — the tile repetition handles that.
-        entries.append({
-            'angle': angle_deg,
-            'ox': x0,
-            'oy': y0,
-            'dx': tile_w,   # shift along line by full tile width each row
-            'dy': tile_h,   # perpendicular repeat = full tile height
-            'dash': seg_len,
-            'gap': -(tile_w * 10),  # large negative gap = draw dash once per tile
-        })
-    return entries
