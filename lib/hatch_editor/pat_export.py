@@ -43,20 +43,16 @@ def _segment_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h):
     sin_t  = math.sin(theta)   # ≥ 0 for all θ in [0°, 180°)
     EPS    = 1e-6
 
-    if sin_t < EPS:                  # θ ≈ 0° — horizontal
-        dx, dy = 0.0, tile_h
-        period = tile_w
-    elif abs(cos_t) < EPS:           # θ ≈ 90° — vertical
-        dx, dy = 0.0, tile_w
-        period = tile_h
-    else:
-        # General case: row offset = tile vector (0, tile_h)
-        # dy = perpendicular component = tile_h · |cos θ|  (always > 0)
-        # dx = along-line stagger     = tile_h · sin θ · sign(cos θ)
-        dy = tile_h * abs(cos_t)
-        dx = tile_h * sin_t * (1.0 if cos_t >= 0.0 else -1.0)
-        # Period along line = projection of tile width + tile height onto line
-        period = tile_w * abs(cos_t) + tile_h * sin_t
+    # Period along line = projection of the tile onto the line direction.
+    # dy * period = tile_w * tile_h guarantees exactly one dash per tile area
+    # for ALL angles.  The old formula dy = tile_h * |cos θ| collapsed to ~0
+    # for near-vertical segments (θ ≈ 90°), causing Revit to draw dozens of
+    # unwanted parallel copies per tile — producing the scattered-lines look.
+    period = tile_w * abs(cos_t) + tile_h * sin_t
+    if period < EPS:
+        return None
+    dy = (tile_w * tile_h) / period
+    dx = 0.0  # no stagger; dy ≥ min(tile_w, tile_h)/√2, so at most one copy per tile
 
     # gap is the space between the end of this dash and the start of the next
     gap = -(period - seg_len)
