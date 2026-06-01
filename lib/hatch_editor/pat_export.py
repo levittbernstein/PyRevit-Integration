@@ -1,37 +1,43 @@
 """Export project to Revit/AutoCAD .pat format."""
 import math
-from .geometry import arc_to_polyline, dist
+from .geometry import arc_to_polyline
 
-ARC_SEGMENTS = 48
-
-# Revit MODEL hatch .pat files use feet as the internal coordinate unit,
-# regardless of the project's display units.  All mm values must be divided
-# by 304.8 before writing.
-_MM_TO_FEET = 1.0 / 304.8
+ARC_SEGMENTS = 64
 
 
 def _segment_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h):
     """
-    Convert a line segment (in mm) to a PAT line-family entry dict (also mm).
+    Convert a line segment (mm) to a PAT line-family entry dict (mm).
 
-    PAT format: angle, ox, oy, dx, dy, dash, gap
-      angle   line direction in degrees
-      ox, oy  origin of the first line in the family
+    PAT format per line:  angle, ox, oy, dx, dy, dash, gap
+      angle   degrees — direction of the line family
+      ox, oy  origin of the first line (anchors where the dash starts)
       dx      stagger along the line between successive parallel lines
-      dy      perpendicular spacing between parallel lines (> 0)
-      dash    drawn dash length
-      gap     skip length (negative in .pat convention)
+      dy      perpendicular spacing between parallel lines  (always > 0)
+      dash    drawn length
+      gap     skip length  (negative in .pat)
 
-    Period strategy — dominant direction:
-      Use the tile dimension that the line crosses most directly to set
-      the repeat period. This guarantees the pattern tiles exactly in
-      the primary axis, minimising positional drift in adjacent tiles.
+    ── Dominant-direction tiling ─────────────────────────────────────────────
+    We choose period and dy based on whichever tile axis the segment crosses
+    most directly.  This guarantees that the family tiles *exactly* in the
+    dominant direction — one dash per tile, no drift, no scatter.
 
-      |cos θ| ≥ sin θ  (≤45° from horizontal)  →  period = tile_w / |cos θ|
-      sin θ  >  |cos θ| (>45° from horizontal)  →  period = tile_h / sin θ
+    |cosθ| ≥ sinθ  (≤45° from horizontal, "horizontal-dominant"):
+        period  = tile_w / |cosθ|       tiles exactly in x
+        dy      = tile_h · |cosθ|
+        dx      = tile_h · sinθ         phase correction for y-tiling
 
-      dy = tile_w * tile_h / period  (ensures exactly one dash per tile area)
-      dx = 0  (no stagger; dy is always close to the tile size)
+    sinθ  > |cosθ| (>45° from horizontal, "vertical-dominant"):
+        period  = tile_h / sinθ         tiles exactly in y
+        dy      = tile_w · sinθ
+        dx      = −tile_w · cosθ        phase correction for x-tiling
+
+    dy · period = tile_w · tile_h in both cases → one dash per tile area.
+
+    The dx values are derived so that shifting one full tile width (for
+    vertical-dominant) or height (for horizontal-dominant) lands on the
+    adjacent row of the family at exactly the right along-line phase —
+    eliminating the positional drift that causes scattered arc segments.
     """
     seg_len = math.hypot(x1 - x0, y1 - y0)
     if seg_len < 1e-9:
@@ -48,19 +54,21 @@ def _segment_to_pat_entry(x0, y0, x1, y1, tile_w, tile_h):
         x0, y0, x1, y1 = x1, y1, x0, y0
 
     theta = math.radians(angle_deg)
-    cos_t = math.cos(theta)   # ≥ 0 for θ ∈ [0°, 90°], ≤ 0 for (90°, 180°)
-    sin_t = math.sin(theta)   # ≥ 0 for all θ ∈ [0°, 180°)
+    cos_t = math.cos(theta)   # ≥ 0 for θ∈[0°,90°], ≤ 0 for θ∈(90°,180°)
+    sin_t = math.sin(theta)   # ≥ 0 for all θ∈[0°,180°)
     EPS   = 1e-6
 
-    # Dominant-direction period: tiles exactly in whichever axis the line
-    # crosses most directly, minimising positional error in adjacent tiles.
-    if abs(cos_t) >= sin_t:          # closer to horizontal
+    if abs(cos_t) >= sin_t:       # horizontal-dominant
         period = tile_w / max(abs(cos_t), EPS)
-    else:                            # closer to vertical
+        dy     = tile_h * abs(cos_t)
+        dx     = tile_h * sin_t
+    else:                         # vertical-dominant
         period = tile_h / max(sin_t, EPS)
+        dy     = tile_w * sin_t
+        dx     = -tile_w * cos_t  # cos_t ≤ 0 here, so dx ≥ 0
 
-    dy = (tile_w * tile_h) / period  # one dash per tile area
-    dx = 0.0
+    if dy < EPS or period < EPS:
+        return None
 
     gap = -(period - seg_len)
 
@@ -100,12 +108,17 @@ def _element_to_pat_entries(el, tile_w, tile_h):
 
 
 def _fmt(v):
-    """Format a float cleanly — up to 8 significant figures, no trailing zeros."""
-    s = f"{v:.8g}"
-    return s
+    return f"{v:.8g}"
 
 
 def export_pat(proj, path):
+    """
+    Write a Revit MODEL hatch .pat file.
+
+    Coordinates are in millimetres — Revit metric projects read MODEL hatch
+    .pat values in mm.  Import the pattern with Scale = 1.0 in Revit's Fill
+    Pattern dialog for a 1:1 match with the tile dimensions you drew.
+    """
     name   = proj['name'].replace(' ', '_')
     tile_w = proj['tile_w']
     tile_h = proj['tile_h']
@@ -117,13 +130,11 @@ def export_pat(proj, path):
 
     for el in proj['elements']:
         for e in _element_to_pat_entries(el, tile_w, tile_h):
-            # Convert all mm values to feet (Revit internal unit for MODEL hatches)
-            sc = _MM_TO_FEET
             lines_out.append(
                 f"{_fmt(e['angle'])},"
-                f"{_fmt(e['ox']*sc)},{_fmt(e['oy']*sc)},"
-                f"{_fmt(e['dx']*sc)},{_fmt(e['dy']*sc)},"
-                f"{_fmt(e['dash']*sc)},{_fmt(e['gap']*sc)}"
+                f"{_fmt(e['ox'])},{_fmt(e['oy'])},"
+                f"{_fmt(e['dx'])},{_fmt(e['dy'])},"
+                f"{_fmt(e['dash'])},{_fmt(e['gap'])}"
             )
 
     with open(path, 'w') as f:
