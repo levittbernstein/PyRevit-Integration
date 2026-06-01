@@ -57,11 +57,5 @@ if not _cpython:
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
 # DETACHED_PROCESS (0x8) | CREATE_NEW_PROCESS_GROUP (0x200) as raw ints —
 # IronPython's subprocess module does not expose these named constants.
-subprocess.Popen(
-    [_cpython, _launcher],
-    creationflags=0x00000008 | 0x00000200,
-    close_fds=True,
-    stdin=open(os.devnull, 'r'),
-    stdout=open(os.devnull, 'w'),
-    stderr=open(os.devnull, 'w'),
-)
+# No stdio redirection: close_fds + redirection is not supported on Windows.
+subprocess.Popen([_cpython, _launcher], creationflags=0x00000008 | 0x00000200)
