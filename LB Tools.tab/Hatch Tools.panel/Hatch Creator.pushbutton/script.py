@@ -55,11 +55,13 @@ if not _cpython:
 # child is killed when the IronPython script host exits, causing the window
 # to flash and disappear.
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
+# DETACHED_PROCESS (0x8) | CREATE_NEW_PROCESS_GROUP (0x200) as raw ints —
+# IronPython's subprocess module does not expose these named constants.
 subprocess.Popen(
     [_cpython, _launcher],
-    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    creationflags=0x00000008 | 0x00000200,
     close_fds=True,
-    stdin=subprocess.DEVNULL,
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
+    stdin=open(os.devnull, 'r'),
+    stdout=open(os.devnull, 'w'),
+    stderr=open(os.devnull, 'w'),
 )
