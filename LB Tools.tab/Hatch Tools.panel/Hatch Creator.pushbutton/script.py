@@ -54,42 +54,36 @@ if not _cpython:
 # fully detached from pyRevit's process tree on Windows — without this the
 # child is killed when the IronPython script host exits, causing the window
 # to flash and disappear.
-import tempfile
-import time
-
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
-_error_log = os.path.join(tempfile.gettempdir(), 'hatch_creator_error.log')
 
-# Diagnostic: verify paths exist before launching
-_missing = [p for p in [_cpython, _launcher] if not os.path.exists(p)]
-if _missing:
+# ── Show diagnostic paths before doing anything ───────────────────────────────
+_info = [
+    'CPython:  ' + _cpython,
+    'exists:   ' + str(os.path.exists(_cpython)),
+    '',
+    'Launcher: ' + _launcher,
+    'exists:   ' + str(os.path.exists(_launcher)),
+    '',
+    'EXT_ROOT: ' + _EXT_ROOT,
+    'EXT_LIB:  ' + _EXT_LIB,
+]
+forms.alert('\n'.join(_info), title='Hatch Creator — diagnostics')
+
+# ── Run launcher blocking so we capture all output ───────────────────────────
+_proc = subprocess.Popen(
+    [_cpython, _launcher],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+_out, _err = _proc.communicate()
+_out = _out.decode('utf-8', errors='replace').strip()
+_err = _err.decode('utf-8', errors='replace').strip()
+
+if _proc.returncode != 0 or _err:
     forms.alert(
-        'Hatch Creator could not start — missing files:\n\n' +
-        '\n'.join(_missing),
-        title='Hatch Creator', warn_icon=True)
-    sys.exit(0)
-
-# Remove any stale error log from a previous run
-if os.path.exists(_error_log):
-    try:
-        os.remove(_error_log)
-    except Exception:
-        pass
-
-# Launch — launcher.py writes its own error log on crash, more reliable
-# than subprocess polling under IronPython.
-subprocess.Popen([_cpython, _launcher])
-
-# Give the process time to start (or crash and write its log)
-time.sleep(3)
-
-# If the error log appeared, the process crashed — show what went wrong
-if os.path.exists(_error_log):
-    try:
-        with open(_error_log, 'r') as _lf:
-            _err = _lf.read().strip()
-    except Exception:
-        _err = '(could not read log)'
-    forms.alert(
-        'Hatch Creator crashed on startup:\n\n' + (_err or '(no output)'),
+        'Exit code: {}\n\nSTDOUT:\n{}\n\nSTDERR:\n{}'.format(
+            _proc.returncode, _out or '(none)', _err or '(none)'),
         title='Hatch Creator error', warn_icon=True)
+else:
+    forms.alert('Process exited cleanly (code 0) — app closed normally.',
+                title='Hatch Creator')
