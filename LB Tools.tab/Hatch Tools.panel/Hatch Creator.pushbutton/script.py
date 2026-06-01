@@ -49,8 +49,17 @@ if not _cpython:
         title='CPython not found', warn_icon=True)
     sys.exit(0)
 
-# ── Launch the Hatch Creator as a non-blocking subprocess ────────────────────
-# The tool is pure Python/tkinter — it needs no Revit APIs and should stay
-# open independently while Revit continues to run.
+# ── Launch the Hatch Creator as a fully detached subprocess ──────────────────
+# DETACHED_PROCESS + CREATE_NEW_PROCESS_GROUP ensures the child process is
+# fully detached from pyRevit's process tree on Windows — without this the
+# child is killed when the IronPython script host exits, causing the window
+# to flash and disappear.
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
-subprocess.Popen([_cpython, _launcher])
+subprocess.Popen(
+    [_cpython, _launcher],
+    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+    close_fds=True,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
