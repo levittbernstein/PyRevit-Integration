@@ -55,7 +55,40 @@ if not _cpython:
 # child is killed when the IronPython script host exits, causing the window
 # to flash and disappear.
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
-# DETACHED_PROCESS (0x8) | CREATE_NEW_PROCESS_GROUP (0x200) as raw ints —
-# IronPython's subprocess module does not expose these named constants.
-# No stdio redirection: close_fds + redirection is not supported on Windows.
-subprocess.Popen([_cpython, _launcher], creationflags=0x00000008 | 0x00000200)
+
+# Diagnostic: verify paths exist before launching
+_missing = [p for p in [_cpython, _launcher] if not os.path.exists(p)]
+if _missing:
+    forms.alert(
+        'Hatch Creator could not start — missing files:\n\n' +
+        '\n'.join(_missing),
+        title='Hatch Creator', warn_icon=True)
+    sys.exit(0)
+
+# Launch with stderr captured to a temp log so startup errors are visible.
+import tempfile
+_log = os.path.join(tempfile.gettempdir(), 'hatch_creator.log')
+with open(_log, 'w') as _lf:
+    _proc = subprocess.Popen(
+        [_cpython, _launcher],
+        stderr=_lf,
+        stdout=_lf,
+    )
+
+# Wait up to 3 seconds — if it exits immediately, show the log.
+import time
+for _ in range(30):
+    time.sleep(0.1)
+    if _proc.poll() is not None:
+        break
+
+if _proc.poll() is not None:
+    try:
+        with open(_log, 'r') as _lf:
+            _err = _lf.read().strip()
+    except Exception:
+        _err = '(could not read log)'
+    forms.alert(
+        'Hatch Creator crashed on startup:\n\n' + (_err or '(no output)') +
+        '\n\nLog: ' + _log,
+        title='Hatch Creator error', warn_icon=True)
