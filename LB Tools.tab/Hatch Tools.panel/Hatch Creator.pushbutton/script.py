@@ -54,7 +54,11 @@ if not _cpython:
 # fully detached from pyRevit's process tree on Windows — without this the
 # child is killed when the IronPython script host exits, causing the window
 # to flash and disappear.
+import tempfile
+import time
+
 _launcher = os.path.join(_EXT_LIB, 'launcher.py')
+_error_log = os.path.join(tempfile.gettempdir(), 'hatch_creator_error.log')
 
 # Diagnostic: verify paths exist before launching
 _missing = [p for p in [_cpython, _launcher] if not os.path.exists(p)]
@@ -65,30 +69,27 @@ if _missing:
         title='Hatch Creator', warn_icon=True)
     sys.exit(0)
 
-# Launch with stderr captured to a temp log so startup errors are visible.
-import tempfile
-_log = os.path.join(tempfile.gettempdir(), 'hatch_creator.log')
-with open(_log, 'w') as _lf:
-    _proc = subprocess.Popen(
-        [_cpython, _launcher],
-        stderr=_lf,
-        stdout=_lf,
-    )
-
-# Wait up to 3 seconds — if it exits immediately, show the log.
-import time
-for _ in range(30):
-    time.sleep(0.1)
-    if _proc.poll() is not None:
-        break
-
-if _proc.poll() is not None:
+# Remove any stale error log from a previous run
+if os.path.exists(_error_log):
     try:
-        with open(_log, 'r') as _lf:
+        os.remove(_error_log)
+    except Exception:
+        pass
+
+# Launch — launcher.py writes its own error log on crash, more reliable
+# than subprocess polling under IronPython.
+subprocess.Popen([_cpython, _launcher])
+
+# Give the process time to start (or crash and write its log)
+time.sleep(3)
+
+# If the error log appeared, the process crashed — show what went wrong
+if os.path.exists(_error_log):
+    try:
+        with open(_error_log, 'r') as _lf:
             _err = _lf.read().strip()
     except Exception:
         _err = '(could not read log)'
     forms.alert(
-        'Hatch Creator crashed on startup:\n\n' + (_err or '(no output)') +
-        '\n\nLog: ' + _log,
+        'Hatch Creator crashed on startup:\n\n' + (_err or '(no output)'),
         title='Hatch Creator error', warn_icon=True)
