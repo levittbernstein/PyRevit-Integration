@@ -30,11 +30,46 @@ internally even in metric projects.  Import with Fill Pattern Scale = 1.0.
 import math
 from .geometry import arc_to_polyline
 
-ARC_SEGMENTS  = 120        # arc sample points (snapped + de-duplicated)
-EXPORT_DIVS   = 160        # sub-grid divisions per tile side (fidelity knob)
-DY_FLOOR_FRAC = 0.10       # arc segments below this·min(W,H) fall back to steps
+# Arcs are resampled to ~TARGET_SEG_MM chords on a GRID_RES_MM sub-grid.
+# Why these values matter:
+#  • Dashes must be long enough that Revit renders them as dashes, not solid
+#    lines.  Over-sampling (tiny 0.5mm chords) makes Revit draw the whole line
+#    family solid → a "furry fan".  ~4mm chords render correctly.
+#  • A 1mm grid gives enough direction variety for smooth curves (7-11 angles
+#    on a typical arc) while keeping dy healthy (≈20mm+), so the family stays
+#    one-dash-per-tile with no clutter.
+GRID_RES_MM   = 1.0        # export sub-grid resolution (mm)
+TARGET_SEG_MM = 4.0        # target arc chord length (mm) — visible dashes
+DY_FLOOR_FRAC = 0.06       # insurance floor; segments below fall back to steps
 _TOL          = 1e-5
 _MM_TO_IN     = 1.0 / 25.4
+
+
+def _resample_polyline(pts, target_len):
+    """Resample a polyline to roughly equal chords of `target_len`."""
+    if len(pts) < 2:
+        return pts
+    # cumulative arc length
+    cum = [0.0]
+    for i in range(1, len(pts)):
+        cum.append(cum[-1] + math.hypot(pts[i][0] - pts[i-1][0],
+                                        pts[i][1] - pts[i-1][1]))
+    total = cum[-1]
+    if total < 1e-9:
+        return [pts[0]]
+    n = max(2, int(round(total / target_len)) + 1)
+    out = []
+    j = 0
+    for s in range(n):
+        d = total * s / (n - 1)
+        while j < len(cum) - 2 and cum[j + 1] < d:
+            j += 1
+        seg = cum[j + 1] - cum[j]
+        t = 0.0 if seg < 1e-12 else (d - cum[j]) / seg
+        x = pts[j][0] + t * (pts[j + 1][0] - pts[j][0])
+        y = pts[j][1] + t * (pts[j + 1][1] - pts[j][1])
+        out.append((x, y))
+    return out
 
 
 def _ext_gcd(a, b):
@@ -147,11 +182,11 @@ def _arc_segment_families(ix0, iy0, ix1, iy1, W, H, gw, gh):
 
 
 def _grid_params(proj):
-    """Resolve the export sub-grid (fine, for arc fidelity)."""
+    """Resolve the export sub-grid (~GRID_RES_MM, dividing the tile evenly)."""
     W = proj['tile_w']
     H = proj['tile_h']
-    Nx = max(1, EXPORT_DIVS)
-    Ny = max(1, EXPORT_DIVS)
+    Nx = max(1, int(round(W / GRID_RES_MM)))
+    Ny = max(1, int(round(H / GRID_RES_MM)))
     return W, H, W / Nx, H / Ny
 
 
@@ -173,11 +208,15 @@ def _element_to_pat_entries(el, W, H, gw, gh):
         return [f] if f else []
 
     elif t in ('arc_cr', 'arc_3pt'):
-        pts = arc_to_polyline(
+        # Dense sample, then resample to ~TARGET_SEG_MM chords so dashes are
+        # long enough for Revit to render them as dashes (not solid lines).
+        dense = arc_to_polyline(
             el['cx'], el['cy'], el['r'],
             el['a_start'], el['a_end'], el['ccw'],
-            segments=ARC_SEGMENTS,
+            segments=200,
         )
+        pts = _resample_polyline(dense, TARGET_SEG_MM)
+
         snapped = []
         for x, y in pts:
             g = (gx(x), gy(y))
