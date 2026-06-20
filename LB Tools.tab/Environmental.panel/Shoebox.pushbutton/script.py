@@ -456,14 +456,17 @@ try:
                 mf.write(u"v {0:.5f} {1:.5f} {2:.5f}\n".format(x * FT_TO_M, y * FT_TO_M, z * FT_TO_M))
             for (a, b, c) in all_t:
                 mf.write(u"f {0} {1} {2}\n".format(a + 1, b + 1, c + 1))
-        # Facade frame (world metres) for later snap-to-parameter authoring
+        # Facade frame (world metres) for snap-to-parameter authoring. The wall
+        # position (wp) must be the ROOM BOUNDARY face on the window side, not
+        # the window's centreline — so the calc plane sits on the boundary.
+        proj_p_bnd = [vx * px + vy * py for (vx, vy) in verts]
+        minp, maxp = min(proj_p_bnd), max(proj_p_bnd)
         loc0 = facade_wins[0].Location
         lp0 = loc0.Point if isinstance(loc0, DB.LocationPoint) else None
-        wp = ((lp0.X * px + lp0.Y * py) if lp0 is not None
-              else sum(v[0] * px + v[1] * py for v in all_v) / len(all_v))
-        centroid_p = (sum(v[0] for v in all_v) / len(all_v)) * px + \
-                     (sum(v[1] for v in all_v) / len(all_v)) * py
-        in_sign = 1.0 if centroid_p > wp else -1.0
+        win_p = (lp0.X * px + lp0.Y * py) if lp0 is not None else (minp + maxp) / 2.0
+        wp = minp if abs(win_p - minp) <= abs(win_p - maxp) else maxp
+        room_centroid_p = sum(proj_p_bnd) / len(proj_p_bnd)
+        in_sign = 1.0 if room_centroid_p > wp else -1.0
         ox, oy = min_d * dx + wp * px, min_d * dy + wp * py
         floor_z_ft = footprint_z_ft if footprint_z_ft is not None else level_base_ft
         frame = {
