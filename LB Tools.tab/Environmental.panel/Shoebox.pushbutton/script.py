@@ -15,12 +15,20 @@ then a fully-detached CPython process hosts the UI and runs the simulation.
 """
 import os
 import io
+import sys
 import json
 import math
 import subprocess
 from datetime import datetime
 
 from pyrevit import revit, DB, forms
+
+# ── Make the shared lib importable (for lb_shoebox.room_storage) ──────────────
+_EXT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+_EXT_LIB = os.path.join(_EXT_ROOT, "lib")
+if _EXT_LIB not in sys.path:
+    sys.path.insert(0, _EXT_LIB)
+from lb_shoebox.room_storage import read_room_state, write_room_state, acquire_room
 
 __title__ = "Shoebox\nDaylight/OH"
 __doc__ = "Extract a room's geometry and assess daylight + overheating in the Shoebox tool."
@@ -51,6 +59,54 @@ def eid(element_id):
         return element_id.Value
     except AttributeError:
         return element_id.IntegerValue
+
+
+# ── Shared-drive state store (must mirror shoebox/revit_bridge/state_store.py) ──
+def _sd_dir():
+    base = os.environ.get("SHOEBOX_STATE_DIR", r"S:\IC Studio\AI\Shoebox\room_states")
+    try:
+        if not os.path.exists(base):
+            os.makedirs(base)
+        return base
+    except Exception:
+        local = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
+                             "Shoebox", "room_states")
+        if not os.path.exists(local):
+            os.makedirs(local)
+        return local
+
+
+def _sd_path(uid):
+    safe = "".join(c for c in uid if c.isalnum() or c in "-_") or "room"
+    return os.path.join(_sd_dir(), "room_{0}.json".format(safe))
+
+
+def _sd_read(uid):
+    p = _sd_path(uid)
+    if not os.path.exists(p):
+        return None
+    try:
+        with io.open(p, "r", encoding="utf-8") as fh:
+            return json.loads(fh.read())
+    except Exception:
+        return None
+
+
+def _sd_write(uid, state):
+    try:
+        with io.open(_sd_path(uid), "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(state, ensure_ascii=False, indent=2))
+    except Exception:
+        pass
+
+
+def _newest(a, b):
+    """The state with the later 'saved_at'. Either may be None."""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    return a if a.get("saved_at", "") >= b.get("saved_at", "") else b
 
 
 def _str_param(el, bip):
@@ -198,6 +254,16 @@ if len(rooms) > 1:
 
 room = rooms[0]
 warnings = []
+
+# ── Ownership: check the room out from central so two users can't clash ───────
+_can_edit, _owner = acquire_room(doc, room)
+if not _can_edit:
+    forms.alert(
+        "This room is being worked on in Shoebox by:\n\n    {0}\n\n"
+        "Their changes save into the model when they sync to central. "
+        "Please wait until then before opening it.".format(_owner),
+        title="Shoebox — room checked out", warn_icon=True)
+    raise SystemExit
 
 # ── Boundary: vertices + bounding walls ───────────────────────────────────────
 opts = DB.SpatialElementBoundaryOptions()
@@ -499,6 +565,28 @@ extract = {
     "base_z": round((footprint_z_ft if footprint_z_ft is not None else level_base_ft) * FT_TO_M, 4),
     "warnings": warnings,
 }
+
+# ── Reconcile saved state: model (Extensible Storage) <-> shared drive ────────
+# The model carries the per-room state in the .rvt (portable, syncs to all
+# users via central); the shared drive is the live channel the 3D tool reads/
+# writes. Newest (by 'saved_at') wins; the winner is written to both so the
+# tool restores it and the model is brought up to date.
+uid = room.UniqueId
+_es_state = read_room_state(room)
+_sd_state = _sd_read(uid)
+_winner = _newest(_es_state, _sd_state)
+if _winner is not None:
+    if _winner is not _sd_state:
+        _sd_write(uid, _winner)                       # tool reads this on launch
+    if _winner is not _es_state:
+        _t = DB.Transaction(doc, "LB Shoebox - save room state")
+        _t.Start()
+        try:
+            write_room_state(room, _winner)           # bring the model up to date
+            _t.Commit()
+        except Exception as _exc:
+            _t.RollBack()
+            warnings.append("Could not write room state to model ({0}).".format(_exc))
 
 # ── Write JSON ────────────────────────────────────────────────────────────────
 out_path = os.path.join(out_dir, "extract_{0}_{1}.json".format(safe_name, stamp))
