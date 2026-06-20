@@ -486,6 +486,7 @@ extract = {
     "room_name": _room_name,
     "room_number": _str_param(room, DB.BuiltInParameter.ROOM_NUMBER),
     "revit_level": level_name,
+    "unique_id": room.UniqueId,
     "width": round(width_m, 4),
     "depth": round(depth_m, 4),
     "height": round(height_m, 4),
