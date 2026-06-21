@@ -303,9 +303,12 @@ for _cat in (DB.BuiltInCategory.OST_Windows, DB.BuiltInCategory.OST_Doors):
                      .WhereElementIsNotElementType()
                      .ToElements())
 
-# A window belongs to this room if Revit reports it bounding the room
-# (phase-based From/To room — robust to stacked walls and separation lines),
-# or, failing that, if its host wall is one of the room's boundary walls.
+# A window belongs to this room if Revit reports it bounding the room via the
+# phase-based From/To room — this is ROOM-SPECIFIC, so it excludes a neighbour's
+# windows when a long wall is shared by several rooms. Only if that yields
+# nothing do we fall back to host-wall membership AND a check that the window
+# actually sits inside this room's footprint (so the shared-wall neighbours
+# still don't leak in).
 room_id = eid(room.Id)
 try:
     room_phase = doc.GetElement(room.CreatedPhaseId)
@@ -321,18 +324,44 @@ def _room_of(w, getter, prop):
         return None
 
 
-def _belongs(w):
-    if _room_of(w, "get_FromRoom", "FromRoom") == room_id:
-        return True
-    if _room_of(w, "get_ToRoom", "ToRoom") == room_id:
-        return True
-    host = getattr(w, "Host", None)
-    if host is not None and eid(host.Id) in wall_by_id:
-        return True
-    return False
+def _phase_belongs(w):
+    return (_room_of(w, "get_FromRoom", "FromRoom") == room_id or
+            _room_of(w, "get_ToRoom", "ToRoom") == room_id)
 
 
-room_wins = [w for w in all_wins if _belongs(w)]
+def _poly_contains(px, py, poly):
+    inside, n, j = False, len(poly), len(poly) - 1
+    for i in range(n):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / ((yj - yi) or 1e-9) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+_cx = sum(x for x, y in footprint_ft) / len(footprint_ft) if footprint_ft else 0.0
+_cy = sum(y for x, y in footprint_ft) / len(footprint_ft) if footprint_ft else 0.0
+
+
+def _loc_in_room(w):
+    try:
+        loc = w.Location
+        p = loc.Point if isinstance(loc, DB.LocationPoint) else None
+        if p is None:
+            return False
+        dx, dy = _cx - p.X, _cy - p.Y           # nudge toward the centroid so a
+        d = (dx * dx + dy * dy) ** 0.5 or 1.0   # point on the wall lands inside
+        return _poly_contains(p.X + dx / d * 0.5, p.Y + dy / d * 0.5, footprint_ft)
+    except Exception:
+        return False
+
+
+room_wins = [w for w in all_wins if _phase_belongs(w)]
+if not room_wins:
+    room_wins = [w for w in all_wins
+                 if getattr(w, "Host", None) is not None
+                 and eid(w.Host.Id) in wall_by_id and _loc_in_room(w)]
 
 if not room_wins:
     forms.alert("No windows found for this room.\n\n"
