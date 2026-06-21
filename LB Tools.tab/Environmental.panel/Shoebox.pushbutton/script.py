@@ -483,6 +483,16 @@ if floor_level is None:
                     "Set 0 for ground floor (changes night-vent rules).".format(level_name))
 level_base_ft = level.Elevation if level else 0.0
 
+# Room "Base Offset": the floor can sit above/below its level (e.g. a sunken or
+# raised room). GetBoundarySegments returns curves at the level elevation, so
+# the real floor is footprint_z + BaseOffset. Use this true floor for base_z,
+# the snap frame origin, and sill heights (measured from the floor, not level).
+try:
+    base_offset_ft = room.BaseOffset
+except Exception:
+    base_offset_ft = 0.0
+room_floor_z_ft = (footprint_z_ft if footprint_z_ft is not None else level_base_ft) + base_offset_ft
+
 # ── Orientation (true-north bearing of the glazing) ──────────────────────────
 try:
     n = facade_wins[0].FacingOrientation
@@ -574,7 +584,7 @@ for w in room_wins:
         except Exception:
             sill_ft = None
         if sill_ft is None:
-            sill_ft = (bb.Min.Z - level_base_ft) if bb else (0.9 / FT_TO_M)
+            sill_ft = (bb.Min.Z - room_floor_z_ft) if bb else (0.9 / FT_TO_M)
 
         # Which wall + centre along it (from the footprint edges)
         try:
@@ -657,9 +667,8 @@ try:
         room_centroid_p = sum(proj_p_bnd) / len(proj_p_bnd)
         in_sign = 1.0 if room_centroid_p > wp else -1.0
         ox, oy = min_d * dx + wp * px, min_d * dy + wp * py
-        floor_z_ft = footprint_z_ft if footprint_z_ft is not None else level_base_ft
         frame = {
-            "origin": [round(ox * FT_TO_M, 4), round(oy * FT_TO_M, 4), round(floor_z_ft * FT_TO_M, 4)],
+            "origin": [round(ox * FT_TO_M, 4), round(oy * FT_TO_M, 4), round(room_floor_z_ft * FT_TO_M, 4)],
             "x_axis": [round(dx, 6), round(dy, 6), 0.0],
             "in_axis": [round(px * in_sign, 6), round(py * in_sign, 6), 0.0],
         }
@@ -687,7 +696,7 @@ extract = {
     # Deduped vertices so footprint edges, external_walls and window wall_index
     # all index the same edge list (arc tessellation points are preserved).
     "footprint": [[round(x * FT_TO_M, 4), round(y * FT_TO_M, 4)] for (x, y) in _fp],
-    "base_z": round((footprint_z_ft if footprint_z_ft is not None else level_base_ft) * FT_TO_M, 4),
+    "base_z": round(room_floor_z_ft * FT_TO_M, 4),
     "north_angle": round(north_angle_rad, 6),
     # Per-surface exposure read from Revit (aligns with the deduped footprint edges)
     "external_walls": [bool(e) for e in _fp_ext],
