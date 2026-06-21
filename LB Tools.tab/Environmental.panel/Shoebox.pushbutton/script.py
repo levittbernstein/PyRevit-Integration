@@ -297,11 +297,18 @@ if not verts:
 # ── Openings (windows + doors) hosted in this room's bounding walls ───────────
 # Glazed doors (balcony/patio) are OST_Doors, so we collect both categories.
 all_wins = []
+window_ids = set()
 for _cat in (DB.BuiltInCategory.OST_Windows, DB.BuiltInCategory.OST_Doors):
-    all_wins += list(DB.FilteredElementCollector(doc)
-                     .OfCategory(_cat)
-                     .WhereElementIsNotElementType()
-                     .ToElements())
+    _els = list(DB.FilteredElementCollector(doc)
+                .OfCategory(_cat).WhereElementIsNotElementType().ToElements())
+    if _cat == DB.BuiltInCategory.OST_Windows:
+        for _e in _els:
+            window_ids.add(eid(_e.Id))
+    all_wins += _els
+
+
+def _is_window(w):
+    return eid(w.Id) in window_ids
 
 # A window belongs to this room if Revit reports it bounding the room via the
 # phase-based From/To room — this is ROOM-SPECIFIC, so it excludes a neighbour's
@@ -357,9 +364,22 @@ def _loc_in_room(w):
         return False
 
 
+def _z_ok(w):
+    """Opening must be at THIS room's level — excludes windows in the same wall
+    one storey up (the 2D footprint test alone can't tell them apart)."""
+    try:
+        bb = w.get_BoundingBox(None)
+        if not bb:
+            return True
+        zc = (bb.Min.Z + bb.Max.Z) / 2.0
+        return (footprint_z_ft - 0.5) <= zc <= (footprint_z_ft + 8.0)  # ~ -0.15 to +2.44 m
+    except Exception:
+        return True
+
+
 def _host_in_room(w):
     h = getattr(w, "Host", None)
-    return h is not None and eid(h.Id) in wall_by_id and _loc_in_room(w)
+    return (h is not None and eid(h.Id) in wall_by_id and _loc_in_room(w) and _z_ok(w))
 
 
 # UNION of two room-specific tests, deduped by id:
@@ -381,29 +401,37 @@ if not room_wins:
     raise SystemExit
 
 
-# ── Choose the facade wall (most glazing). Warn if multi-aspect. ──────────────
-def _win_area_ft2(w):
+# ── Choose the facade wall. Prefer the wall with the most WINDOW area (daylight
+# comes from windows, not doors); fall back to total opening area. ────────────
+def _opening_area_ft2(w):
     bb = w.get_BoundingBox(None)
     if not bb:
         return 0.0
     return (bb.Max.X - bb.Min.X + bb.Max.Y - bb.Min.Y) * (bb.Max.Z - bb.Min.Z)
 
 
-wins_by_host = {}   # host id (or None) -> [windows]
+wins_by_host = {}   # host id (or None) -> [openings]
 for w in room_wins:
     host = getattr(w, "Host", None)
     wins_by_host.setdefault(eid(host.Id) if host is not None else None, []).append(w)
 
-facade_key = max(wins_by_host.keys(),
-                 key=lambda k: sum(_win_area_ft2(w) for w in wins_by_host[k]))
+
+def _wall_score(k):
+    win_area = sum(_opening_area_ft2(w) for w in wins_by_host[k] if _is_window(w))
+    tot_area = sum(_opening_area_ft2(w) for w in wins_by_host[k])
+    return (win_area, tot_area)   # windows dominate; doors break ties
+
+
+facade_key = max(wins_by_host.keys(), key=_wall_score)
 facade_wins = wins_by_host[facade_key]
 facade_host = getattr(facade_wins[0], "Host", None)
 
 if len(wins_by_host) > 1:
+    n_other = sum(len(v) for k, v in wins_by_host.items() if k != facade_key)
     warnings.append(
-        "Windows found on {0} walls (multi-aspect). Shoebox is single-aspect — "
-        "using the most-glazed wall ({1} window(s)). Review the others separately."
-        .format(len(wins_by_host), len(facade_wins)))
+        "Openings on {0} walls — Shoebox is single-aspect. Simulating the {1} "
+        "opening(s) on the most-glazed wall; the other {2} (on other walls) are "
+        "shown in 3D but not simulated.".format(len(wins_by_host), len(facade_wins), n_other))
 
 # ── Facade direction: from the wall curve if usable, else the window facing ───
 dx = dy = None
@@ -549,7 +577,7 @@ try:
     opt.IncludeNonVisibleObjects = False
     opt.DetailLevel = DB.ViewDetailLevel.Fine
     all_v, all_t = [], []
-    for w in facade_wins:
+    for w in room_wins:        # tessellate ALL the room's openings (every wall)
         v, t = _tessellate(w, opt)
         base = len(all_v)
         all_v += v
