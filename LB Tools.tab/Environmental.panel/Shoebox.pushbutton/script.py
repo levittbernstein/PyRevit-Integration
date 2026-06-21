@@ -350,18 +350,28 @@ def _loc_in_room(w):
         p = loc.Point if isinstance(loc, DB.LocationPoint) else None
         if p is None:
             return False
-        dx, dy = _cx - p.X, _cy - p.Y           # nudge toward the centroid so a
-        d = (dx * dx + dy * dy) ** 0.5 or 1.0   # point on the wall lands inside
-        return _poly_contains(p.X + dx / d * 0.5, p.Y + dy / d * 0.5, footprint_ft)
+        dx, dy = _cx - p.X, _cy - p.Y           # nudge ~0.45 m toward the centroid
+        d = (dx * dx + dy * dy) ** 0.5 or 1.0   # so the wall-centreline point clears
+        return _poly_contains(p.X + dx / d * 1.5, p.Y + dy / d * 1.5, footprint_ft)
     except Exception:
         return False
 
 
-room_wins = [w for w in all_wins if _phase_belongs(w)]
-if not room_wins:
-    room_wins = [w for w in all_wins
-                 if getattr(w, "Host", None) is not None
-                 and eid(w.Host.Id) in wall_by_id and _loc_in_room(w)]
+def _host_in_room(w):
+    h = getattr(w, "Host", None)
+    return h is not None and eid(h.Id) in wall_by_id and _loc_in_room(w)
+
+
+# UNION of two room-specific tests, deduped by id:
+#  - phase From/To room  -> catches doors (and any opening Revit tags to the room)
+#  - host wall + inside footprint -> catches exterior WINDOWS, which Revit often
+#    leaves with null From/To room. Both exclude a neighbour's openings on a
+#    shared wall (different room / outside this footprint).
+_seen = {}
+for w in all_wins:
+    if _phase_belongs(w) or _host_in_room(w):
+        _seen[eid(w.Id)] = w
+room_wins = list(_seen.values())
 
 if not room_wins:
     forms.alert("No windows found for this room.\n\n"
