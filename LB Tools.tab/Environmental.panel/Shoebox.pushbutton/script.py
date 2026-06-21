@@ -321,11 +321,13 @@ _cy = sum(y for x, y in footprint_ft) / len(footprint_ft) if footprint_ft else 0
 
 _lvl_elevs = sorted(set(l.Elevation for l in
                         DB.FilteredElementCollector(doc).OfClass(DB.Level)))
-next_level_elev = footprint_z_ft + 100.0
-for _e in _lvl_elevs:
-    if _e > footprint_z_ft + 0.5:
-        next_level_elev = _e
-        break
+# Base the level cap on the room's actual Level (authoritative) rather than the
+# boundary curve Z, which can sit between levels and resolve the "next level" to
+# two storeys up — letting one-storey-up openings slip under the cap.
+_room_level = doc.GetElement(room.LevelId) if room.LevelId else None
+base_elev = _room_level.Elevation if _room_level is not None else footprint_z_ft
+_above = [e for e in _lvl_elevs if e > base_elev + 0.5]
+next_level_elev = min(_above) if _above else base_elev + 100.0
 
 
 def _level_ok(w):
@@ -334,7 +336,7 @@ def _level_ok(w):
         if not bb:
             return True
         zc = (bb.Min.Z + bb.Max.Z) / 2.0
-        return (footprint_z_ft - 0.5) <= zc < (next_level_elev - 0.1)
+        return (base_elev - 1.0) <= zc < (next_level_elev - 0.1)
     except Exception:
         return True
 
@@ -345,7 +347,7 @@ def _lateral_in_room(w):
         p = loc.Point if isinstance(loc, DB.LocationPoint) else None
         if p is None:
             return False
-        zc = footprint_z_ft + 1.6          # ~0.5 m above floor, safely inside the room
+        zc = base_elev + 1.6               # ~0.5 m above floor, safely inside the room
         cands = []
         host = getattr(w, "Host", None)
         if isinstance(host, DB.Wall):
@@ -376,6 +378,9 @@ if not room_wins:
     room_wins = [w for w in all_wins
                  if getattr(w, "Host", None) is not None
                  and eid(w.Host.Id) in wall_by_id and _level_ok(w)]
+
+warnings.append("Level filter: floor {0:.2f} m; openings at/above the next level "
+                "({1:.2f} m) excluded.".format(base_elev * FT_TO_M, next_level_elev * FT_TO_M))
 
 if not room_wins:
     forms.alert("No windows found for this room.\n\n"
