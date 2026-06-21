@@ -310,88 +310,72 @@ for _cat in (DB.BuiltInCategory.OST_Windows, DB.BuiltInCategory.OST_Doors):
 def _is_window(w):
     return eid(w.Id) in window_ids
 
-# A window belongs to this room if Revit reports it bounding the room via the
-# phase-based From/To room — this is ROOM-SPECIFIC, so it excludes a neighbour's
-# windows when a long wall is shared by several rooms. Only if that yields
-# nothing do we fall back to host-wall membership AND a check that the window
-# actually sits inside this room's footprint (so the shared-wall neighbours
-# still don't leak in).
-room_id = eid(room.Id)
-try:
-    room_phase = doc.GetElement(room.CreatedPhaseId)
-except Exception:
-    room_phase = None
-
-
-def _room_of(w, getter, prop):
-    try:
-        r = getattr(w, getter)(room_phase) if room_phase else getattr(w, prop)
-        return eid(r.Id) if r is not None else None
-    except Exception:
-        return None
-
-
-def _phase_belongs(w):
-    return (_room_of(w, "get_FromRoom", "FromRoom") == room_id or
-            _room_of(w, "get_ToRoom", "ToRoom") == room_id)
-
-
-def _poly_contains(px, py, poly):
-    inside, n, j = False, len(poly), len(poly) - 1
-    for i in range(n):
-        xi, yi = poly[i]
-        xj, yj = poly[j]
-        if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / ((yj - yi) or 1e-9) + xi):
-            inside = not inside
-        j = i
-    return inside
-
-
+# Membership uses Revit's own room geometry — robust for shared/long walls and
+# (later) non-rectangular rooms. An opening belongs if a point nudged off its
+# wall INTO the room (at this level) passes room.IsPointInRoom, AND its vertical
+# position is below the next level up (so a window one storey up in the same
+# wall is excluded). Lateral test forces a safe in-room Z to isolate the XY
+# question; the level test uses the opening's real Z.
 _cx = sum(x for x, y in footprint_ft) / len(footprint_ft) if footprint_ft else 0.0
 _cy = sum(y for x, y in footprint_ft) / len(footprint_ft) if footprint_ft else 0.0
 
-
-def _loc_in_room(w):
-    try:
-        loc = w.Location
-        p = loc.Point if isinstance(loc, DB.LocationPoint) else None
-        if p is None:
-            return False
-        dx, dy = _cx - p.X, _cy - p.Y           # nudge ~0.45 m toward the centroid
-        d = (dx * dx + dy * dy) ** 0.5 or 1.0   # so the wall-centreline point clears
-        return _poly_contains(p.X + dx / d * 1.5, p.Y + dy / d * 1.5, footprint_ft)
-    except Exception:
-        return False
+_lvl_elevs = sorted(set(l.Elevation for l in
+                        DB.FilteredElementCollector(doc).OfClass(DB.Level)))
+next_level_elev = footprint_z_ft + 100.0
+for _e in _lvl_elevs:
+    if _e > footprint_z_ft + 0.5:
+        next_level_elev = _e
+        break
 
 
-def _z_ok(w):
-    """Opening must be at THIS room's level — excludes windows in the same wall
-    one storey up (the 2D footprint test alone can't tell them apart)."""
+def _level_ok(w):
     try:
         bb = w.get_BoundingBox(None)
         if not bb:
             return True
         zc = (bb.Min.Z + bb.Max.Z) / 2.0
-        return (footprint_z_ft - 0.5) <= zc <= (footprint_z_ft + 8.0)  # ~ -0.15 to +2.44 m
+        return (footprint_z_ft - 0.5) <= zc < (next_level_elev - 0.1)
     except Exception:
         return True
 
 
-def _host_in_room(w):
-    h = getattr(w, "Host", None)
-    return (h is not None and eid(h.Id) in wall_by_id and _loc_in_room(w) and _z_ok(w))
+def _lateral_in_room(w):
+    try:
+        loc = w.Location
+        p = loc.Point if isinstance(loc, DB.LocationPoint) else None
+        if p is None:
+            return False
+        zc = footprint_z_ft + 1.6          # ~0.5 m above floor, safely inside the room
+        cands = []
+        host = getattr(w, "Host", None)
+        if isinstance(host, DB.Wall):
+            n = host.Orientation           # try both sides of the wall
+            try:
+                off = host.Width / 2.0 + 0.5
+            except Exception:
+                off = 0.8
+            cands.append(DB.XYZ(p.X + n.X * off, p.Y + n.Y * off, zc))
+            cands.append(DB.XYZ(p.X - n.X * off, p.Y - n.Y * off, zc))
+        dx, dy = _cx - p.X, _cy - p.Y       # and toward the room centroid
+        d = (dx * dx + dy * dy) ** 0.5 or 1.0
+        cands.append(DB.XYZ(p.X + dx / d * 1.5, p.Y + dy / d * 1.5, zc))
+        for pt in cands:
+            try:
+                if room.IsPointInRoom(pt):
+                    return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
 
 
-# UNION of two room-specific tests, deduped by id:
-#  - phase From/To room  -> catches doors (and any opening Revit tags to the room)
-#  - host wall + inside footprint -> catches exterior WINDOWS, which Revit often
-#    leaves with null From/To room. Both exclude a neighbour's openings on a
-#    shared wall (different room / outside this footprint).
-_seen = {}
-for w in all_wins:
-    if _phase_belongs(w) or _host_in_room(w):
-        _seen[eid(w.Id)] = w
-room_wins = list(_seen.values())
+room_wins = [w for w in all_wins if _lateral_in_room(w) and _level_ok(w)]
+if not room_wins:
+    # Fallback (if IsPointInRoom is unavailable): hosted in a bounding wall, at level
+    room_wins = [w for w in all_wins
+                 if getattr(w, "Host", None) is not None
+                 and eid(w.Host.Id) in wall_by_id and _level_ok(w)]
 
 if not room_wins:
     forms.alert("No windows found for this room.\n\n"
