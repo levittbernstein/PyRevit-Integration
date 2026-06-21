@@ -271,21 +271,40 @@ loops = room.GetBoundarySegments(opts)
 verts = []          # (x, y) in feet — all loops, for width/depth
 wall_by_id = {}     # int id -> Wall
 footprint_ft = []   # outer loop only, tessellated (handles arcs/curved walls)
+footprint_ext = []  # parallel to footprint_ft: True if that edge's wall is exterior
 footprint_z_ft = None  # boundary world Z = true room floor (more reliable than level.Elevation)
+
+
+def _wall_external(el):
+    """True if a boundary element is an exterior wall (exposed to outside).
+    Room-separation lines / missing elements / interior-function walls -> False
+    (party/internal -> adiabatic). Uses the Revit WallType Function so the
+    designation matches what the modeller set on the wall."""
+    if not isinstance(el, DB.Wall):
+        return False
+    try:
+        return el.WallType.Function == DB.WallFunction.Exterior
+    except Exception:
+        return True   # assume worst-case exposed if Function is unreadable
+
+
 for li, loop in enumerate(loops):
     for seg in loop:
         crv = seg.GetCurve()
         p0 = crv.GetEndPoint(0)
         verts.append((p0.X, p0.Y))
+        el = doc.GetElement(seg.ElementId)
         if li == 0:
             if footprint_z_ft is None:
                 footprint_z_ft = p0.Z
+            seg_ext = _wall_external(el)
             try:
                 for pp in crv.Tessellate():
                     footprint_ft.append((pp.X, pp.Y))
+                    footprint_ext.append(seg_ext)
             except Exception:
                 footprint_ft.append((p0.X, p0.Y))
-        el = doc.GetElement(seg.ElementId)
+                footprint_ext.append(seg_ext)
         if isinstance(el, DB.Wall):
             wall_by_id[eid(el.Id)] = el
 
@@ -487,13 +506,21 @@ except Exception:
     north_angle_rad = 0.0
 
 # ── Footprint vertices (deduped) for assigning each window to its wall ────────
+# Carry each kept vertex's wall-exposure flag so external_walls[i] describes the
+# edge starting at _fp[i] (i.e. the wall that edge runs along).
 _fp = []
-for (x, y) in footprint_ft:
+_fp_ext = []
+for _k, (x, y) in enumerate(footprint_ft):
     if not _fp or abs(_fp[-1][0] - x) > 1e-6 or abs(_fp[-1][1] - y) > 1e-6:
         _fp.append((x, y))
+        _fp_ext.append(footprint_ext[_k] if _k < len(footprint_ext) else True)
 if len(_fp) > 1 and abs(_fp[0][0] - _fp[-1][0]) < 1e-6 and abs(_fp[0][1] - _fp[-1][1]) < 1e-6:
     _fp = _fp[:-1]
+    _fp_ext = _fp_ext[:len(_fp)]
 _nfp = len(_fp)
+
+# Ceiling is exterior (roof) only when there's no storey above this room.
+_ceiling_external = not [e for e in _lvl_elevs if e > footprint_z_ft + 0.5]
 
 
 def _assign_edge(lp):
@@ -657,9 +684,15 @@ extract = {
     "windows": windows_out,
     "mesh_obj": mesh_obj_path,
     "frame": frame,
-    "footprint": [[round(x * FT_TO_M, 4), round(y * FT_TO_M, 4)] for (x, y) in footprint_ft],
+    # Deduped vertices so footprint edges, external_walls and window wall_index
+    # all index the same edge list (arc tessellation points are preserved).
+    "footprint": [[round(x * FT_TO_M, 4), round(y * FT_TO_M, 4)] for (x, y) in _fp],
     "base_z": round((footprint_z_ft if footprint_z_ft is not None else level_base_ft) * FT_TO_M, 4),
     "north_angle": round(north_angle_rad, 6),
+    # Per-surface exposure read from Revit (aligns with the deduped footprint edges)
+    "external_walls": [bool(e) for e in _fp_ext],
+    "external_floor": bool(floor_level == 0),
+    "external_ceiling": bool(_ceiling_external),
     "warnings": warnings,
 }
 
