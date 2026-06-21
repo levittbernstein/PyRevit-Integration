@@ -420,11 +420,9 @@ facade_wins = wins_by_host[facade_key]
 facade_host = getattr(facade_wins[0], "Host", None)
 
 if len(wins_by_host) > 1:
-    n_other = sum(len(v) for k, v in wins_by_host.items() if k != facade_key)
     warnings.append(
-        "Openings on {0} walls — Shoebox is single-aspect. Simulating the {1} "
-        "opening(s) on the most-glazed wall; the other {2} (on other walls) are "
-        "shown in 3D but not simulated.".format(len(wins_by_host), len(facade_wins), n_other))
+        "Multi-aspect: openings on {0} walls — all simulated on their respective "
+        "walls (cross-ventilation applied).".format(len(wins_by_host)))
 
 # ── Facade direction: from the wall curve if usable, else the window facing ───
 dx = dy = None
@@ -482,9 +480,43 @@ except Exception:
     orientation = 180.0
     warnings.append("Could not read orientation; defaulted to 180deg (south) — verify.")
 
-# ── Per-window extraction ────────────────────────────────────────────────────
+# ── True-north angle (project -> true north, radians) for the polygon sim ─────
+try:
+    north_angle_rad = doc.ActiveProjectLocation.GetProjectPosition(DB.XYZ.Zero).Angle
+except Exception:
+    north_angle_rad = 0.0
+
+# ── Footprint vertices (deduped) for assigning each window to its wall ────────
+_fp = []
+for (x, y) in footprint_ft:
+    if not _fp or abs(_fp[-1][0] - x) > 1e-6 or abs(_fp[-1][1] - y) > 1e-6:
+        _fp.append((x, y))
+if len(_fp) > 1 and abs(_fp[0][0] - _fp[-1][0]) < 1e-6 and abs(_fp[0][1] - _fp[-1][1]) < 1e-6:
+    _fp = _fp[:-1]
+_nfp = len(_fp)
+
+
+def _assign_edge(lp):
+    """Nearest footprint edge to a window location -> (wall_index, center_x ft)."""
+    best_i, best_d, best_cx = 0, 1e18, 0.0
+    for i in range(_nfp):
+        ax, ay = _fp[i]
+        bx, by = _fp[(i + 1) % _nfp]
+        ddx, ddy = bx - ax, by - ay
+        L2 = ddx * ddx + ddy * ddy
+        if L2 == 0:
+            continue
+        t = max(0.0, min(1.0, ((lp.X - ax) * ddx + (lp.Y - ay) * ddy) / L2))
+        cxp, cyp = ax + t * ddx, ay + t * ddy
+        d = (lp.X - cxp) ** 2 + (lp.Y - cyp) ** 2
+        if d < best_d:
+            best_d, best_i, best_cx = d, i, t * (L2 ** 0.5)
+    return best_i, best_cx
+
+
+# ── Per-window extraction (ALL the room's openings, on every wall) ────────────
 windows_out = []
-for w in facade_wins:
+for w in room_wins:
     try:
         sym = doc.GetElement(w.GetTypeId())
 
@@ -517,13 +549,16 @@ for w in facade_wins:
         if sill_ft is None:
             sill_ft = (bb.Min.Z - level_base_ft) if bb else (0.9 / FT_TO_M)
 
-        # Centre along facade, from the room's left edge (min projection on d)
+        # Which wall + centre along it (from the footprint edges)
         try:
             loc = w.Location
             lp = loc.Point if isinstance(loc, DB.LocationPoint) else (bb.Min if bb else None)
         except Exception:
             lp = bb.Min if bb else None
-        center_ft = ((lp.X * dx + lp.Y * dy) - min_d) if lp is not None else (width_m / FT_TO_M / 2)
+        if lp is not None and _nfp >= 3:
+            wall_index, center_ft = _assign_edge(lp)
+        else:
+            wall_index, center_ft = 0, (width_m / FT_TO_M / 2)
 
         # Reveal ~ host wall thickness (proxy; user adjusts)
         try:
@@ -537,6 +572,7 @@ for w in facade_wins:
             "height": round(ft2m(h_ft), 4),
             "sill_height": round(max(0.0, ft2m(sill_ft)), 4),
             "center_x": round(max(0.01, ft2m(center_ft)), 4),
+            "wall_index": int(wall_index),
             "reveal_depth": round(max(0.0, reveal_m), 4),
             "family_name": _name_via_param(w, [DB.BuiltInParameter.ALL_MODEL_FAMILY_NAME]),
             "type_name": _name_via_param(w, [DB.BuiltInParameter.ALL_MODEL_TYPE_NAME,
@@ -623,6 +659,7 @@ extract = {
     "frame": frame,
     "footprint": [[round(x * FT_TO_M, 4), round(y * FT_TO_M, 4)] for (x, y) in footprint_ft],
     "base_z": round((footprint_z_ft if footprint_z_ft is not None else level_base_ft) * FT_TO_M, 4),
+    "north_angle": round(north_angle_rad, 6),
     "warnings": warnings,
 }
 
