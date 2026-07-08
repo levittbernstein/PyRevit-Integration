@@ -438,10 +438,12 @@ facade_key = max(wins_by_host.keys(), key=_wall_score)
 facade_wins = wins_by_host[facade_key]
 facade_host = getattr(facade_wins[0], "Host", None)
 
-if len(wins_by_host) > 1:
-    warnings.append(
-        "Multi-aspect: openings on {0} walls — all simulated on their respective "
-        "walls (cross-ventilation applied).".format(len(wins_by_host)))
+# NOTE: no multi-aspect warning here — wall COUNT is not the same as aspect
+# COUNT (two parallel walls facing the same way, e.g. a stepped facade, are
+# still single-aspect). The Shoebox tool computes true direction-based aspect
+# live from the actual openings and shows it in the room-stats line, so it
+# stays correct as openings are added/moved/removed — a static count at
+# extraction time would just go stale or be wrong.
 
 # ── Facade direction: from the wall curve if usable, else the window facing ───
 dx = dy = None
@@ -597,20 +599,17 @@ for w in room_wins:
         else:
             wall_index, center_ft = 0, (width_m / FT_TO_M / 2)
 
-        # Reveal ~ host wall thickness (proxy; user adjusts)
-        try:
-            wh = getattr(w, "Host", None)
-            reveal_m = ft2m(wh.Width) if isinstance(wh, DB.Wall) else 0.0
-        except Exception:
-            reveal_m = 0.0
-
+        # Reveal depth is NOT extracted from Revit (wall thickness is a poor
+        # proxy for the actual glazing setback) — the user types external/
+        # internal reveal depth per opening in the tool. 0.0 here is just the
+        # unset default.
         windows_out.append({
             "width": round(ft2m(w_ft), 4),
             "height": round(ft2m(h_ft), 4),
             "sill_height": round(max(0.0, ft2m(sill_ft)), 4),
             "center_x": round(max(0.01, ft2m(center_ft)), 4),
             "wall_index": int(wall_index),
-            "reveal_depth": round(max(0.0, reveal_m), 4),
+            "reveal_depth": 0.0,
             "family_name": _name_via_param(w, [DB.BuiltInParameter.ALL_MODEL_FAMILY_NAME]),
             "type_name": _name_via_param(w, [DB.BuiltInParameter.ALL_MODEL_TYPE_NAME,
                                              DB.BuiltInParameter.SYMBOL_NAME_PARAM]),
@@ -623,8 +622,6 @@ if not windows_out:
     forms.alert("Found windows but couldn't extract geometry.\n\nWhy:\n- {0}".format(detail),
                 title="Shoebox", warn_icon=True)
     raise SystemExit
-
-warnings.append("Reveal depth estimated from wall thickness — adjust per window in the popup.")
 
 # ── Output folder + names ─────────────────────────────────────────────────────
 out_dir = os.path.join(os.environ.get("TEMP", os.path.expanduser("~")), "shoebox_extracts")
