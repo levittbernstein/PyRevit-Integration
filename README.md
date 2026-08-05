@@ -9,6 +9,7 @@ A growing suite of Revit automation tools for Levitt Bernstein, delivered as a s
 | Tool | Panel | Description |
 |---|---|---|
 | Export Register | Issue Register | Exports a formatted Deliverables List & Issue Sheet (Excel + PDF) |
+| Keynote Manager | Keynotes | Renumber, reorder and categorise keynotes, then sync to the keynote file and all model references |
 
 ---
 
@@ -85,6 +86,12 @@ LB-IssueRegister.extension/        ← pyRevit extension root (must end in .exte
 └── lib/
     ├── lb_shared/                  ← shared utilities used by all tools
     │   └── extensible_storage.py   ← Revit Extensible Storage manager
+    ├── keynote_manager/            ← all code for the Keynote Manager tool
+    │   ├── keynote_file.py         ← .txt parse/write, encoding preservation
+    │   ├── keynote_reader.py       ← KeynoteTable path + reference snapshot
+    │   ├── renumber.py             ← category model + key computation
+    │   ├── sync.py                 ← pre-flight, atomic apply, audit log
+    │   └── dialog.py + dialog.xaml ← WPF manager window
     ├── issue_register/             ← all code for the Issue Register tool
     │   ├── revit_reader.py         ← Revit API data extraction
     │   ├── storage.py              ← per-project settings persistence
@@ -216,6 +223,65 @@ dialog opens, preventing two users editing the settings simultaneously.
 
 ---
 
+## Keynote Manager — detail
+
+### What it does
+
+Revit gives keynotes a key when they are created and offers no way to change or
+reorder them afterwards. Keys are sorted alphabetically in the keynote browser,
+so the key string *is* the order. This tool renumbers them safely.
+
+- **Categories** are stored as native Revit parent rows (the keynote file's
+  third column). A category keyed `R` named `Railings` gives its children
+  `R01`, `R02`… and Revit's own keynote browser shows a proper tree — no
+  dependency on this tool to read the result.
+- **Two numbering modes** — category prefix (`R01`, `W02`) or flat sequential
+  (`01`, `02`). Switching modes renumbers; it never loses the category
+  structure.
+- **Duplicate detection** — flags keynote text used by more than one key and
+  offers a merge that repoints every reference onto the surviving key.
+- **Live preview** — the new key for every entry is shown before anything is
+  written. *Preview changes* writes a full table to the pyRevit output window.
+
+### Why the Update step is not live
+
+A key change must be written to the external .txt file **and** to every model
+reference as one operation. Three separate parameters hold keynote keys:
+
+| Parameter | Lives on |
+|---|---|
+| `BuiltInParameter.KEYNOTE_PARAM` | Element **types** (not instances) |
+| `BuiltInParameter.KEYNOTE_PARAM` | **Materials** (same param — there is no `Material.Keynote`) |
+| `BuiltInParameter.KEY_VALUE` | Keynote **tag** instances (`OST_KeynoteTags`) |
+
+Tags store the key as a plain string with **no ElementId or GUID link** back to
+the keynote table, so they do not follow a key change — not even after
+`KeynoteTable.Reload()`. Batching all of this behind one explicit *Update*
+keeps the file and the model in step; updating per-edit would mean dozens of
+file writes, each a chance to half-fail and desync.
+
+### Safety measures
+
+1. Refuses to open a file managed by pyRevit's own Keynote Manager (it embeds a
+   database on `#`-prefixed lines; two writers would corrupt it).
+2. Refuses to run unless the file survives a byte-exact read/write round-trip.
+3. Verifies the file is genuinely writable **before** touching the model.
+4. Timestamped backup into a `_LB_keynote_backups` subfolder before any write.
+5. **If the model update fails, the .txt is restored from that backup** — a
+   renumbered file with an un-renumbered model is the worst outcome and is the
+   failure mode reported from other keynote tools.
+6. Writes an audit log of the old→new key map, because tags in **linked or
+   other models** sharing the keynote file cannot be fixed from one session.
+
+### Known limits
+
+- Tags inside linked models, and other projects sharing the same keynote file,
+  are not updated. The audit log exists so they can be brought into line.
+- Revit caches the keynote table. If the Keynote browser still shows old
+  numbers after an update, close and reopen it.
+
+---
+
 ## Developer notes — IronPython gotchas
 
 pyRevit runs `script.py` and any modules it imports under IronPython. This
@@ -287,6 +353,45 @@ _store = ExtensibleStorageManager(..., data_storage_class=_DataStorage)
 If the type is in a different assembly than `Transaction`, scan all loaded
 assemblies. The `ExtensibleStorageManager` already handles a `None` result
 gracefully by falling back to `doc.ProjectInformation`.
+
+---
+
+### ❌ Never write a Revit keynote file as UTF-8 without a BOM
+
+**Symptom:** Revit either fails to load the keynote file, or every keynote text
+comes back as mojibake. Often not noticed until someone opens a sheet.
+
+**Cause:** LB project keynote files are **UTF-16 LE with a BOM** and CRLF line
+endings. Revit accepts ANSI, UTF-16 with BOM, or UTF-8 **with** BOM. A BOM-less
+UTF-8 file — the default of nearly every editor and of naive Python
+`open(path, 'w')` — is not reliably readable.
+
+**Fix:** never guess the encoding on write. `keynote_file.read_keynote_file()`
+records the exact BOM, codec, newline and trailing-newline state it found in a
+`FileMeta`, and `write_keynote_file()` reproduces them byte-for-byte.
+`test_roundtrip()` asserts that reading and re-serialising an unedited file
+produces identical bytes, and the tool refuses to run if it does not:
+
+```python
+ok, detail = keynote_file.test_roundtrip(path)
+if not ok:
+    # our parser has lost information — do NOT rewrite this file
+```
+
+Any new code that writes a Revit-consumed text file should follow the same
+read-meta / write-meta pattern rather than assuming an encoding.
+
+---
+
+### ⚠️ Revit keynote tags do not follow a key change
+
+Worth knowing even outside this tool: a keynote tag stores the key as a **plain
+string**, with no ElementId or GUID linking it to the keynote table. Editing the
+keynote .txt orphans every tag holding the old key, silently, and
+`KeynoteTable.Reload()` does not repair them. There is also **no write API** for
+the keynote table — `KeynoteTable` exposes only `GetKeyBasedTreeEntries()`,
+`LoadFrom()` and `Reload()`, and `Reload()` throws
+`ModificationOutsideTransactionException` outside a transaction.
 
 ---
 
