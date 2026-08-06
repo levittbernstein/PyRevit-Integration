@@ -203,6 +203,44 @@ class KeynoteModel(object):
                 entry.parent = target.key
                 target.children.append(entry)
 
+    def move_to(self, entry_key, category_key, index=None):
+        """
+        Move one entry into *category_key* (None = uncategorised) at *index*.
+
+        This is what drag-and-drop calls: dropping onto another keynote inserts
+        at that keynote's position, dropping onto a category header appends to
+        that category.  Doing the list surgery here rather than in the dialog
+        keeps the ordering rules in one testable place.
+        """
+        entry = self.entry_by_key(entry_key)
+        if entry is None:
+            return False
+
+        target = (self.uncategorised if category_key is None
+                  else self.find_category(category_key))
+        if category_key is not None and target is None:
+            return False
+        dest = self.uncategorised if category_key is None else target.children
+
+        owner = self._owner_of(entry)
+        if owner is None:
+            return False
+
+        # Semantics: the entry ends up AT *index* in the resulting list.
+        # Because the entry is removed first, this gives the conventional
+        # nearest-gap behaviour without any special-casing — dragging down onto
+        # a target lands after it, dragging up onto a target lands before it.
+        # Deliberately no correction for the removal shift: adding one makes
+        # downward drags land before the target, which reads as the item not
+        # having moved far enough.
+        owner.remove(entry)
+        if index is None:
+            index = len(dest)
+        index = max(0, min(index, len(dest)))
+        entry.parent = u'' if category_key is None else category_key
+        dest.insert(index, entry)
+        return True
+
     def move_entry(self, key, delta):
         """Reorder an entry within its own group."""
         entry = self.entry_by_key(key)

@@ -9,6 +9,19 @@ subclassing Window, controls are found with FindName and wired with .NET '+='.
 The dialog performs NO model writes.  It returns an action and the edited model
 to script.py, which owns the transaction.  That keeps every Revit modification
 in the script's own API context and matches how issue_register works.
+
+Editing model
+-------------
+NEW and KEYNOTE TEXT are editable TextBoxes.
+
+The NEW box is pre-filled with the auto-computed key.  We remember what we put
+there (self._autofilled); if the box no longer matches, the user has typed a
+manual override, which wins over the computed value.  That is what makes both
+the "auto renumber" and "type your own number" behaviours coexist without a
+mode switch.
+
+Because the grid is rebuilt on every structural change, edits must be harvested
+out of the live controls before any rebuild — see _flush_edits().
 """
 
 import io
@@ -24,11 +37,18 @@ import System.Windows.Markup as Markup
 from System.Windows import (
     GridLength, GridUnitType, Thickness, Visibility,
     VerticalAlignment, FontWeights, TextTrimming,
+    DragDrop, DragDropEffects, DataObject,
 )
 from System.Windows.Controls import (
-    TextBlock, CheckBox, Grid, ColumnDefinition, RowDefinition,
+    TextBlock, TextBox, CheckBox, Grid, ColumnDefinition, RowDefinition,
 )
+from System.Windows.Input import Cursors
 from System.Windows.Media import Brushes
+
+# DragDropEffects.None cannot be written literally — None is a Python keyword.
+# IronPython exposes it as None_, but fetch it defensively across versions.
+_NO_EFFECT = getattr(DragDropEffects, 'None_',
+                     getattr(DragDropEffects, 'None', 0))
 
 from keynote_manager import renumber as rn
 from keynote_manager import sync as ksync
@@ -39,10 +59,15 @@ def _load_xaml(path):
         return Markup.XamlReader.Parse(fh.read())
 
 
-# Column widths for the keynote grid: check, old key, arrow, new key, text, category
-_COLS = [26, 62, 16, 74, None, 96]
+# grip, check, old key, new key, keynote text, category
+_COLS = [18, 24, 56, 78, None, 92]
+
+_HEADER_H = 22
+_GROUP_H  = 24
+_ROW_H    = 25
 
 _UNCATEGORISED = u'(uncategorised)'
+_DRAG_FORMAT   = 'LBKeynoteKey'
 
 
 class KeynoteDialog(object):
@@ -56,15 +81,24 @@ class KeynoteDialog(object):
 
         self._action     = 'close'
         self._key_map    = {}
-        self._checks     = {}   # keynote key -> CheckBox
-        self._newlabels  = {}   # keynote key -> TextBlock showing the new key
-        self._assign_keys = []  # category keys parallel to AssignCombo items
-        self._dup_groups  = []  # parallel to DuplicateList items
+
+        self._checks     = {}   # key -> CheckBox
+        self._newboxes   = {}   # key -> TextBox (new key)
+        self._textboxes  = {}   # key -> TextBox (keynote text)
+        self._autofilled = {}   # key -> the value WE wrote into the new box
+        self._overrides  = {}   # key -> user-typed new key
+
+        self._grip_keys   = {}  # grip TextBlock -> key
+        self._row_spans   = []  # (top, bottom, kind, ref) for drop targeting
+        self._assign_keys = []
+        self._dup_groups  = []
 
         self._win = _load_xaml(
             os.path.join(os.path.dirname(__file__), 'dialog.xaml'))
+        self._container = self._win.FindName('KeynoteContainer')
 
         self._setup_file_info()
+        self._setup_dragdrop()
         self._wire()
         self._refresh_all()
 
@@ -77,15 +111,25 @@ class KeynoteDialog(object):
 
         m = self._win.FindName('FileMetaText')
         if m is not None:
-            n_entries = len(self._model.all_entries())
             m.Text = (
                 '{}  |  {} keynotes, {} categories  |  '
                 'model references: {} tags, {} types, {} materials'.format(
                     self._meta.describe() if self._meta else 'unknown encoding',
-                    n_entries, len(self._model.categories),
+                    len(self._model.all_entries()),
+                    len(self._model.categories),
                     self._ref_stats.get('tag', 0),
                     self._ref_stats.get('type', 0),
                     self._ref_stats.get('material', 0)))
+
+    def _setup_dragdrop(self):
+        if self._container is None:
+            return
+        # A Grid with no Background is invisible to hit-testing, so Drop would
+        # never fire.
+        self._container.Background = Brushes.Transparent
+        self._container.AllowDrop = True
+        self._container.DragOver += self._on_drag_over
+        self._container.Drop += self._on_drop
 
     def _wire(self):
         w = self._win
@@ -112,6 +156,7 @@ class KeynoteDialog(object):
         hook('AssignBtn',     self._on_assign)
         hook('UnassignBtn',   self._on_unassign)
         hook('SortBtn',       self._on_sort)
+        hook('ResetKeysBtn',  self._on_reset_keys)
         hook('SelectAllBtn',  self._on_select_all)
         hook('SelectNoneBtn', self._on_select_none)
 
@@ -143,6 +188,31 @@ class KeynoteDialog(object):
             return max(1, min(6, int(str(box.Text).strip())))
         except (ValueError, TypeError):
             return rn.DEFAULT_PADDING
+
+    # ── Harvesting live edits ─────────────────────────────────────────────────
+
+    def _flush_edits(self):
+        """
+        Pull edits out of the live TextBoxes into the model and override map.
+
+        Must run before any grid rebuild, or in-progress typing is lost.
+        """
+        for key, box in self._textboxes.items():
+            entry = self._model.entry_by_key(key)
+            if entry is not None:
+                new_text = str(box.Text).strip()
+                if new_text != entry.text:
+                    entry.text = new_text
+
+        for key, box in self._newboxes.items():
+            typed = str(box.Text).strip()
+            auto  = self._autofilled.get(key, u'')
+            if typed == auto:
+                continue                      # untouched — stay on auto
+            if not typed:
+                self._overrides.pop(key, None)  # cleared — back to auto
+            else:
+                self._overrides[key] = typed
 
     # ── Refresh ───────────────────────────────────────────────────────────────
 
@@ -188,9 +258,12 @@ class KeynoteDialog(object):
     # ── Keynote grid ──────────────────────────────────────────────────────────
 
     def _build_keynote_grid(self):
-        container = self._win.FindName('KeynoteContainer')
+        container = self._container
         if container is None:
             return
+
+        scroller = self._win.FindName('KeynoteScroller')
+        offset = scroller.VerticalOffset if scroller is not None else 0
 
         checked_keys = set(k for k, cb in self._checks.items() if cb.IsChecked)
 
@@ -198,7 +271,10 @@ class KeynoteDialog(object):
         container.RowDefinitions.Clear()
         container.ColumnDefinitions.Clear()
         self._checks    = {}
-        self._newlabels = {}
+        self._newboxes  = {}
+        self._textboxes = {}
+        self._grip_keys = {}
+        self._row_spans = []
 
         for width in _COLS:
             cd = ColumnDefinition()
@@ -206,17 +282,27 @@ class KeynoteDialog(object):
                         else GridLength(width))
             container.ColumnDefinitions.Add(cd)
 
-        row = [0]  # boxed so nested helpers can increment it
+        state = {'row': 0, 'y': 0.0}
 
-        def add_row(height):
+        def add_row(height, kind=None, ref=None):
             rd = RowDefinition()
             rd.Height = GridLength(height)
             container.RowDefinitions.Add(rd)
-            r = row[0]
-            row[0] += 1
+            r = state['row']
+            if kind is not None:
+                self._row_spans.append(
+                    (state['y'], state['y'] + height, kind, ref))
+            state['row'] += 1
+            state['y'] += height
             return r
 
-        def cell(text, r, c, bold=False, brush=None, size=11, trim=False):
+        def place(ctrl, r, c):
+            Grid.SetRow(ctrl, r)
+            Grid.SetColumn(ctrl, c)
+            container.Children.Add(ctrl)
+            return ctrl
+
+        def label(text, r, c, bold=False, brush=None, size=11, trim=False):
             tb = TextBlock()
             tb.Text = text or u''
             tb.FontSize = size
@@ -227,55 +313,71 @@ class KeynoteDialog(object):
             if brush is not None:
                 tb.Foreground = brush
             if trim:
-                # Long keynote text must not force the grid wider than the
-                # panel — ellipsise instead of wrapping or overflowing.
                 tb.TextTrimming = TextTrimming.CharacterEllipsis
                 tb.ToolTip = text or u''
-            Grid.SetRow(tb, r)
-            Grid.SetColumn(tb, c)
-            container.Children.Add(tb)
-            return tb
+            return place(tb, r, c)
+
+        def editbox(value, r, c, width=None):
+            box = TextBox()
+            box.Text = value or u''
+            box.FontSize = 11
+            box.Height = 21
+            box.Margin = Thickness(2, 2, 3, 2)
+            box.VerticalContentAlignment = VerticalAlignment.Center
+            box.BorderBrush = Brushes.Gainsboro
+            if width:
+                box.Width = width
+            return place(box, r, c)
 
         # Header
-        r = add_row(22)
-        for idx, label in enumerate(
-                [u'', u'KEY', u'', u'NEW', u'KEYNOTE TEXT', u'CATEGORY']):
-            cell(label, r, idx, bold=True, brush=Brushes.Gray, size=10)
+        r = add_row(_HEADER_H)
+        for idx, text in enumerate(
+                [u'', u'', u'KEY', u'NEW', u'KEYNOTE TEXT', u'CATEGORY']):
+            label(text, r, idx, bold=True, brush=Brushes.Gray, size=10)
 
-        def group(title, count):
-            r = add_row(24)
-            tb = cell(u'{}   ({})'.format(title, count), r, 0, bold=True, size=11)
+        def group_row(title, count, cat_key):
+            gr = add_row(_GROUP_H, 'group', cat_key)
+            tb = label(u'{}   ({})'.format(title, count), gr, 0,
+                       bold=True, size=11)
             Grid.SetColumnSpan(tb, len(_COLS))
             tb.Foreground = Brushes.White
             tb.Background = Brushes.DimGray
             tb.Padding = Thickness(6, 2, 6, 2)
+            tb.ToolTip = 'Drop a keynote here to move it into this group'
 
         def entry_row(entry, cat_key):
-            r = add_row(22)
+            er = add_row(_ROW_H, 'entry', entry.key)
+
+            grip = label(u'≡', er, 0, brush=Brushes.Silver, size=13)
+            grip.Cursor = Cursors.SizeAll
+            grip.ToolTip = 'Drag to reorder, or onto a category header'
+            grip.MouseLeftButtonDown += self._on_grip_down
+            self._grip_keys[grip] = entry.key
 
             cb = CheckBox()
-            cb.Margin = Thickness(4, 3, 0, 0)
+            cb.Margin = Thickness(3, 5, 0, 0)
             cb.IsChecked = entry.key in checked_keys
-            Grid.SetRow(cb, r)
-            Grid.SetColumn(cb, 0)
-            container.Children.Add(cb)
+            place(cb, er, 1)
             self._checks[entry.key] = cb
 
-            cell(entry.key, r, 1)
-            cell(u'→', r, 2, brush=Brushes.Silver, size=10)
-            self._newlabels[entry.key] = cell(u'', r, 3, bold=True)
-            cell(entry.text, r, 4, trim=True)
-            cell(cat_key or u'', r, 5, brush=Brushes.Gray, size=10)
+            label(entry.key, er, 2)
+            self._newboxes[entry.key]  = editbox(u'', er, 3)
+            self._textboxes[entry.key] = editbox(entry.text, er, 4)
+            label(cat_key or u'', er, 5, brush=Brushes.Gray, size=10, trim=True)
 
         for cat in self._model.categories:
-            group(u'{}  {}'.format(cat.key, cat.text or u''), len(cat.children))
+            group_row(u'{}  {}'.format(cat.key, cat.text or u''),
+                      len(cat.children), cat.key)
             for child in cat.children:
                 entry_row(child, cat.key)
 
         if self._model.uncategorised:
-            group(_UNCATEGORISED, len(self._model.uncategorised))
+            group_row(_UNCATEGORISED, len(self._model.uncategorised), None)
             for entry in self._model.uncategorised:
                 entry_row(entry, u'')
+
+        if scroller is not None:
+            scroller.ScrollToVerticalOffset(offset)
 
     def _checked(self):
         """Keys of every ticked row, in display order."""
@@ -286,23 +388,98 @@ class KeynoteDialog(object):
         return [k for k in ordered
                 if k in self._checks and self._checks[k].IsChecked]
 
+    # ── Drag and drop ─────────────────────────────────────────────────────────
+
+    def _on_grip_down(self, sender, e):
+        key = self._grip_keys.get(sender)
+        if not key:
+            return
+        self._flush_edits()
+        try:
+            DragDrop.DoDragDrop(sender, DataObject(_DRAG_FORMAT, key),
+                                DragDropEffects.Move)
+        except Exception:
+            pass
+
+    def _on_drag_over(self, sender, e):
+        present = False
+        try:
+            present = e.Data.GetDataPresent(_DRAG_FORMAT)
+        except Exception:
+            pass
+        e.Effects = DragDropEffects.Move if present else _NO_EFFECT
+        e.Handled = True
+
+    def _target_at(self, y):
+        for top, bottom, kind, ref in self._row_spans:
+            if top <= y < bottom:
+                return kind, ref
+        return None, None
+
+    def _on_drop(self, sender, e):
+        try:
+            if not e.Data.GetDataPresent(_DRAG_FORMAT):
+                return
+            source_key = e.Data.GetData(_DRAG_FORMAT)
+        except Exception:
+            return
+
+        y = e.GetPosition(self._container).Y
+        kind, ref = self._target_at(y)
+        if kind is None or source_key == ref:
+            return
+
+        self._flush_edits()
+
+        if kind == 'group':
+            # Dropped on a header — append to that group.
+            self._model.move_to(source_key, ref, None)
+            where = ref or 'uncategorised'
+        else:
+            target = self._model.entry_by_key(ref)
+            if target is None:
+                return
+            cat_key = target.parent or None
+            dest = (self._model.uncategorised if cat_key is None
+                    else self._model.find_category(cat_key).children)
+            self._model.move_to(source_key, cat_key, dest.index(target))
+            where = cat_key or 'uncategorised'
+
+        self._refresh_all()
+        self._status('Moved {} into {}.'.format(source_key, where))
+        e.Handled = True
+
     # ── Live key preview ──────────────────────────────────────────────────────
 
     def _recompute(self):
         use_prefix = self._use_prefix()
-        self._key_map = self._model.compute_keys(
+
+        auto = self._model.compute_keys(
             use_prefix=use_prefix,
             padding=self._padding(),
             renumber_uncategorised=self._renumber_uncategorised())
 
-        for key, label in self._newlabels.items():
-            new = self._key_map.get(key)
-            if new is None:
-                label.Text = u''
-                label.Foreground = Brushes.Silver
+        # Manual entries win over the computed value.
+        combined = dict(auto)
+        for key, typed in self._overrides.items():
+            combined[key] = typed
+        # A "change" that lands on the same key is not a change.
+        self._key_map = dict((o, n) for o, n in combined.items() if o != n)
+
+        for key, box in self._newboxes.items():
+            if key in self._overrides:
+                box.Text = self._overrides[key]
+                box.Foreground = Brushes.DarkOrange
+                box.ToolTip = 'Manually set. Clear the box to return to auto.'
+                self._autofilled[key] = None
             else:
-                label.Text = new
-                label.Foreground = Brushes.SeaGreen
+                value = auto.get(key, u'')
+                box.Text = value
+                self._autofilled[key] = value
+                box.Foreground = Brushes.SeaGreen if value else Brushes.Black
+                box.ToolTip = ('Auto-numbered. Type here to set it yourself.'
+                               if value else
+                               'Unchanged. Type a key here to renumber it.')
 
         hint = self._win.FindName('ModeHintText')
         if hint is not None:
@@ -316,17 +493,21 @@ class KeynoteDialog(object):
 
         problems = self._model.validate_new_keys(self._key_map)
         affected = sum(len(self._refs.get(k, [])) for k in self._key_map)
+        n_manual = len(self._overrides)
 
         if problems:
             self._status(u'{} problem(s) must be fixed: {}'.format(
                 len(problems), problems[0]), error=True)
         elif not self._key_map:
             self._status(u'No key changes yet. Create a category and assign '
-                         u'keynotes to it, or enable flat renumbering.')
+                         u'keynotes to it, type a key in the NEW column, or '
+                         u'enable flat renumbering.')
         else:
-            self._status(u'{} key change(s) pending, affecting {} model '
+            extra = u' ({} set manually)'.format(n_manual) if n_manual else u''
+            self._status(u'{} key change(s) pending{}, affecting {} model '
                          u'reference(s). Nothing is written until you press '
-                         u'Update model.'.format(len(self._key_map), affected))
+                         u'Update model.'.format(
+                             len(self._key_map), extra, affected))
 
     def _status(self, text, error=False):
         tb = self._win.FindName('StatusText')
@@ -355,8 +536,8 @@ class KeynoteDialog(object):
         if info is not None:
             info.Text = (
                 '{} keynote text(s) are used by more than one key. Two keys for '
-                'one item means tags in different views may disagree about which '
-                'key describes it.'.format(len(self._dup_groups)))
+                'one item means tags in different views may disagree about '
+                'which key describes it.'.format(len(self._dup_groups)))
 
         for text, entries in self._dup_groups:
             lb.Items.Add(u'{}   —   keys {}'.format(
@@ -375,18 +556,22 @@ class KeynoteDialog(object):
             self._status(err, error=True)
             return
 
+        self._flush_edits()
         self._model.add_category(key, name)
         if key_box is not None:
             key_box.Text = ''
         if name_box is not None:
             name_box.Text = ''
         self._refresh_all()
+        self._status('Added category "{}". Tick keynotes and press Assign, or '
+                     'drag them onto its header.'.format(key))
 
     def _on_del_category(self, sender, e):
         cat = self._selected_category()
         if cat is None:
             self._status('Select a category to delete.', error=True)
             return
+        self._flush_edits()
         n = len(cat.children)
         self._model.remove_category(cat.key)
         self._refresh_all()
@@ -404,13 +589,14 @@ class KeynoteDialog(object):
         if cat is None:
             self._status('Select a category to move.', error=True)
             return
+        self._flush_edits()
         if self._model.move_category(cat.key, delta):
-            lb = self._win.FindName('CategoryList')
-            new_index = self._model.categories.index(
-                self._model.find_category(cat.key))
             self._refresh_all()
+            lb = self._win.FindName('CategoryList')
             if lb is not None:
-                lb.SelectedIndex = new_index
+                found = self._model.find_category(cat.key)
+                if found is not None:
+                    lb.SelectedIndex = self._model.categories.index(found)
 
     # ── Entry handlers ────────────────────────────────────────────────────────
 
@@ -423,10 +609,12 @@ class KeynoteDialog(object):
     def _move_entries(self, delta):
         keys = self._checked()
         if not keys:
-            self._status('Tick the keynotes you want to move first.', error=True)
+            self._status('Tick the keynotes you want to move first, or drag '
+                         'the ≡ handle.', error=True)
             return
-        # Moving down must process from the bottom up (and vice versa) or the
-        # items tread on each other and relative order is lost.
+        self._flush_edits()
+        # Moving down must process bottom-up (and vice versa) or the items
+        # tread on each other and relative order is lost.
         for key in (keys if delta < 0 else list(reversed(keys))):
             self._model.move_entry(key, delta)
         self._build_keynote_grid()
@@ -435,16 +623,20 @@ class KeynoteDialog(object):
     def _on_assign(self, sender, e):
         keys = self._checked()
         if not keys:
-            self._status('Tick the keynotes you want to assign first.', error=True)
+            self._status('Tick the keynotes you want to assign first.',
+                         error=True)
             return
         combo = self._win.FindName('AssignCombo')
         if combo is None or combo.SelectedIndex < 0:
-            self._status('Create a category first, then select it here.', error=True)
+            self._status('Create a category first (key + name, then Add), '
+                         'then select it here.', error=True)
             return
+        self._flush_edits()
         cat_key = self._assign_keys[combo.SelectedIndex]
         self._model.assign(keys, cat_key)
         self._refresh_all()
-        self._status('Assigned {} keynote(s) to "{}".'.format(len(keys), cat_key))
+        self._status('Assigned {} keynote(s) to "{}".'.format(
+            len(keys), cat_key))
 
     def _on_unassign(self, sender, e):
         keys = self._checked()
@@ -452,17 +644,30 @@ class KeynoteDialog(object):
             self._status('Tick the keynotes you want to remove from their '
                          'category first.', error=True)
             return
+        self._flush_edits()
         self._model.assign(keys, None)
         self._refresh_all()
-        self._status('Removed {} keynote(s) from their category.'.format(len(keys)))
+        self._status('Removed {} keynote(s) from their category.'.format(
+            len(keys)))
 
     def _on_sort(self, sender, e):
         cat = self._selected_category()
+        self._flush_edits()
         self._model.sort_group(cat.key if cat is not None else None, by='text')
         self._build_keynote_grid()
         self._recompute()
         self._status('Sorted {} by keynote text.'.format(
             '"{}"'.format(cat.key) if cat is not None else 'uncategorised'))
+
+    def _on_reset_keys(self, sender, e):
+        if not self._overrides:
+            self._status('No manual keys to reset.')
+            return
+        n = len(self._overrides)
+        self._overrides = {}
+        self._recompute()
+        self._status('Cleared {} manual key(s) — back to auto-numbering.'
+                     .format(n))
 
     def _on_select_all(self, sender, e):
         for cb in self._checks.values():
@@ -484,19 +689,27 @@ class KeynoteDialog(object):
         keys = sorted((en.key for en in entries), key=rn._natural_key)
         keep, drop = keys[0], keys[1:]
 
+        self._flush_edits()
         self._model.merge(keep, drop)
+        for key in drop:
+            self._overrides.pop(key, None)
         self._refresh_all()
         self._status('Merged {} into {}. All references to {} will be '
-                     'repointed.'.format(', '.join(drop), keep, ', '.join(drop)))
+                     'repointed.'.format(', '.join(drop), keep,
+                                         ', '.join(drop)))
 
     def _on_option_changed(self, sender, e):
+        self._flush_edits()
         self._recompute()
 
     # ── Preview / Update / Close ──────────────────────────────────────────────
 
     def _on_preview(self, sender, e):
+        self._flush_edits()
+        self._recompute()
         if not self._key_map:
-            self._status('Nothing to preview — no keys would change.', error=True)
+            self._status('Nothing to preview — no keys would change.',
+                         error=True)
             return
 
         report = ksync.plan(self._model, self._refs, self._key_map)
@@ -536,11 +749,15 @@ class KeynoteDialog(object):
                 for r in report['rows']]
         out.print_table(
             table_data=rows,
-            columns=['Old', 'New', '', 'Tags', 'Types', 'Materials', 'Keynote text'])
+            columns=['Old', 'New', '', 'Tags', 'Types', 'Materials',
+                     'Keynote text'])
 
     def _on_update(self, sender, e):
+        self._flush_edits()
+        self._recompute()
         if not self._key_map:
-            self._status('Nothing to update — no keys would change.', error=True)
+            self._status('Nothing to update — no keys would change.',
+                         error=True)
             return
         problems = self._model.validate_new_keys(self._key_map)
         if problems:

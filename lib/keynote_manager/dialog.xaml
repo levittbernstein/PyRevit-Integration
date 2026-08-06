@@ -149,9 +149,21 @@
     </StackPanel>
 
     <!-- ═══ KEYNOTES ═══════════════════════════════════════════════════ -->
-    <StackPanel Grid.Row="2" Margin="0,0,0,12">
-      <TextBlock Style="{StaticResource SectionHeader}" Text="KEYNOTES"/>
-      <Border Style="{StaticResource PanelBorder}">
+    <!-- A Grid, NOT a StackPanel: a vertical StackPanel gives its children
+         unlimited height, so the ScrollViewer would size to all 44 rows and
+         push the action buttons off the bottom of the window. Auto/*/Auto
+         constrains the list to the space left over and keeps the buttons
+         visible. -->
+    <Grid Grid.Row="2" Margin="0,0,0,12">
+      <Grid.RowDefinitions>
+        <RowDefinition Height="Auto"/>
+        <RowDefinition Height="*"/>
+        <RowDefinition Height="Auto"/>
+      </Grid.RowDefinitions>
+
+      <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="KEYNOTES"/>
+
+      <Border Grid.Row="1" Style="{StaticResource PanelBorder}">
         <ScrollViewer x:Name="KeynoteScroller"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
@@ -159,19 +171,25 @@
         </ScrollViewer>
       </Border>
 
-      <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-        <Button x:Name="EntryUpBtn" Style="{StaticResource SmallButton}" Content="Move Up"/>
-        <Button x:Name="EntryDownBtn" Style="{StaticResource SmallButton}" Content="Move Down"/>
-        <TextBlock Style="{StaticResource FieldLabel}" Text="Assign to:" Margin="12,0,6,0"/>
-        <ComboBox x:Name="AssignCombo" Width="150" Height="26" Margin="0,0,5,0"/>
-        <Button x:Name="AssignBtn" Style="{StaticResource SmallButton}" Content="Assign"/>
-        <Button x:Name="UnassignBtn" Style="{StaticResource SmallButton}"
-                Content="Remove from category" MinWidth="140"/>
-        <Button x:Name="SortBtn" Style="{StaticResource SmallButton}" Content="Sort by text"/>
-        <Button x:Name="SelectAllBtn" Style="{StaticResource SmallButton}" Content="Select all"/>
-        <Button x:Name="SelectNoneBtn" Style="{StaticResource SmallButton}" Content="Clear"/>
+      <StackPanel Grid.Row="2" Margin="0,8,0,0">
+        <TextBlock Style="{StaticResource ListLabel}"
+                   Text="Drag the ≡ handle to reorder, or drop onto a category header to move a keynote into it. NEW and KEYNOTE TEXT are editable."/>
+        <StackPanel Orientation="Horizontal">
+          <Button x:Name="EntryUpBtn" Style="{StaticResource SmallButton}" Content="Move Up"/>
+          <Button x:Name="EntryDownBtn" Style="{StaticResource SmallButton}" Content="Move Down"/>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Assign to:" Margin="12,0,6,0"/>
+          <ComboBox x:Name="AssignCombo" Width="140" Height="26" Margin="0,0,5,0"/>
+          <Button x:Name="AssignBtn" Style="{StaticResource SmallButton}" Content="Assign"/>
+          <Button x:Name="UnassignBtn" Style="{StaticResource SmallButton}"
+                  Content="Remove from category" MinWidth="138"/>
+          <Button x:Name="SortBtn" Style="{StaticResource SmallButton}" Content="Sort by text"/>
+          <Button x:Name="ResetKeysBtn" Style="{StaticResource SmallButton}"
+                  Content="Reset manual keys" MinWidth="118"/>
+          <Button x:Name="SelectAllBtn" Style="{StaticResource SmallButton}" Content="Select all"/>
+          <Button x:Name="SelectNoneBtn" Style="{StaticResource SmallButton}" Content="Clear"/>
+        </StackPanel>
       </StackPanel>
-    </StackPanel>
+    </Grid>
 
     <!-- ═══ NUMBERING ══════════════════════════════════════════════════ -->
     <StackPanel Grid.Row="3" Margin="0,0,0,12">
