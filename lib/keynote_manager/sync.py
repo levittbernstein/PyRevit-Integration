@@ -159,12 +159,21 @@ def plan(model, refs_by_key, key_map):
     unreferenced = [r for r in rows
                     if not (r['tags'] or r['types'] or r['materials'])]
 
+    # New keynotes carry no old key, so report them separately under the key
+    # they will actually land on.
+    added = []
+    for provisional in model.added:
+        final = key_map.get(provisional, provisional)
+        entry = model.entry_by_key(provisional)
+        added.append((final, entry.text if entry is not None else u''))
+
     return {
         'rows':          rows,
         'totals':        totals,
         'key_changes':   len(key_map),
         'unreferenced':  len(unreferenced),
         'merges':        len(model.merged),
+        'added':         added,
     }
 
 
@@ -222,7 +231,8 @@ def apply_changes(doc, path, model, key_map, refs_by_key, meta):
         'error':       None,
     }
 
-    if not key_map:
+    # Additions alone are enough to justify a write, even with no key changes.
+    if not model.has_changes(key_map):
         report['error'] = 'Nothing to update — no keys changed.'
         return report
 
@@ -344,11 +354,24 @@ def _write_audit(path, key_map, model, report):
             u'OLD KEY\tNEW KEY\tNOTE',
         ]
 
+        added = set(model.added)
         for old, new in sorted(key_map.items(), key=lambda kv: _sortable(kv[1])):
             note = u''
             if old in model.merged:
                 note = u'merged into {}'.format(model.merged[old])
+            elif old in added:
+                note = u'new keynote'
             lines.append(u'{}\t{}\t{}'.format(old, new, note))
+
+        # New keynotes that were never renumbered have no key_map row, so list
+        # them separately or they would be missing from the audit entirely.
+        new_only = [k for k in model.added if k not in key_map]
+        if new_only:
+            lines.extend([u'', u'NEW KEYNOTES ADDED:'])
+            for key in new_only:
+                entry = model.entry_by_key(key)
+                lines.append(u'{}\t{}'.format(
+                    key, entry.text if entry is not None else u''))
 
         if report['skipped']:
             lines.extend([u'', u'SKIPPED IN THIS MODEL:'])

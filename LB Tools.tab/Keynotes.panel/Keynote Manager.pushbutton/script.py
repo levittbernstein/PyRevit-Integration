@@ -141,7 +141,11 @@ else:
                                         settings_key=ksettings.project_key(doc))
                     action, state = dlg.show()
 
-                    if action == 'update' and state['key_map']:
+                    # has_changes(), not just key_map: a brand-new keynote
+                    # produces no old->new mapping, so gating on key_map alone
+                    # would silently discard additions.
+                    if action == 'update' and state['model'].has_changes(
+                            state['key_map']):
                         pf = ksync.preflight(doc, path, state['model'],
                                              state['key_map'])
 
@@ -157,11 +161,14 @@ else:
                             n_refs = sum(len(refs_by_key.get(k, []))
                                          for k in state['key_map'])
 
-                            msg = ('About to renumber {} keynote key(s) and '
-                                   'update {} reference(s) in this model.\n\n'
+                            n_added = len(state['model'].added)
+                            msg = ('About to renumber {} keynote key(s), add {} '
+                                   'new keynote(s), and update {} reference(s) '
+                                   'in this model.\n\n'
                                    'The keynote file will be backed up to the '
                                    '{} folder first.'.format(
-                                       n_changes, n_refs, kfile.BACKUP_DIRNAME))
+                                       n_changes, n_added, n_refs,
+                                       kfile.BACKUP_DIRNAME))
                             if pf.warnings:
                                 msg += '\n\n' + '\n\n'.join(pf.warnings)
 
@@ -184,7 +191,8 @@ else:
                                     lines = [
                                         'Keynote update complete.',
                                         '',
-                                        'Keys changed:   {}'.format(n_changes),
+                                        'Keys changed:      {}'.format(n_changes),
+                                        'Keynotes added:    {}'.format(n_added),
                                         'Tags updated:      {}'.format(
                                             report['updated']['tag']),
                                         'Types updated:     {}'.format(

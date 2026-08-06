@@ -58,6 +58,7 @@ class KeynoteModel(object):
         self.categories    = []
         self.uncategorised = []
         self._merged       = {}   # dropped_key -> surviving_key
+        self._added        = []   # keys of entries created in this session
         self._load(entries)
 
     # ── Construction ──────────────────────────────────────────────────────────
@@ -65,6 +66,13 @@ class KeynoteModel(object):
     def _load(self, entries):
         by_key   = dict((e.key, e) for e in entries)
         children = {}
+
+        # Every key that has ever existed in this file, so a new keynote never
+        # reuses one that has been vacated by a merge or a renumber.  Reusing a
+        # freed key is actively dangerous: a tag in a LINKED model still holding
+        # the old string would silently resolve to unrelated text, and wrong
+        # keynote text is worse than a visibly missing one.  Gaps are harmless.
+        self._historic = set(by_key.keys())
 
         for e in entries:
             if e.parent and e.parent in by_key:
@@ -173,6 +181,98 @@ class KeynoteModel(object):
             return False
         self.categories[i], self.categories[j] = self.categories[j], self.categories[i]
         return True
+
+    # ── Creating entries ──────────────────────────────────────────────────────
+
+    def next_free_key(self, category_key=None, padding=DEFAULT_PADDING):
+        """
+        Lowest unused key in the relevant namespace.
+
+        Inside a category the key is prefixed with the category key, so a new
+        railing lands on R07 rather than colliding with the flat sequence.
+        Keys retired earlier in the session are excluded, so gaps left by
+        merges and renumbers are never reused — see _load() for why.
+        """
+        used = set(e.key for e in self.all_entries())
+        used |= set(c.key for c in self.categories)
+        used |= self._historic   # never resurrect a retired key — see _load()
+
+        cat = self.find_category(category_key) if category_key else None
+        prefix = cat.key if cat is not None else u''
+
+        n = 1
+        while True:
+            candidate = u'{}{}'.format(prefix, str(n).zfill(padding))
+            if candidate not in used:
+                return candidate
+            n += 1
+
+    def add_entry(self, text, category_key=None, padding=DEFAULT_PADDING,
+                  key=None):
+        """
+        Create a brand-new keynote.
+
+        The key is real and collision-free from the moment of creation, not a
+        placeholder.  That matters because an uncategorised addition with
+        renumbering off is never passed through compute_keys(), so whatever key
+        it is given here is the key that reaches the file.
+        """
+        text = (text or u'').strip()
+        if not text:
+            raise ValueError('Keynote text cannot be empty.')
+        if u'\t' in text:
+            raise ValueError('Keynote text cannot contain a tab character.')
+
+        if key is None:
+            key = self.next_free_key(category_key, padding)
+        else:
+            key = key.strip()
+            err = self.validate_entry_key(key)
+            if err:
+                raise ValueError(err)
+
+        cat = self.find_category(category_key) if category_key else None
+        if category_key and cat is None:
+            raise ValueError('No such category: {}'.format(category_key))
+
+        from keynote_manager.keynote_file import KeynoteEntry
+        entry = KeynoteEntry(key, text, cat.key if cat is not None else u'')
+
+        if cat is not None:
+            cat.children.append(entry)
+        else:
+            self.uncategorised.append(entry)
+
+        self._added.append(key)
+        self._historic.add(key)
+        return entry
+
+    def validate_entry_key(self, key):
+        """Return an error string, or None if *key* is free and well-formed."""
+        key = (key or u'').strip()
+        if not key:
+            return 'Keynote key cannot be empty.'
+        if u'\t' in key:
+            return 'Keynote key cannot contain a tab character.'
+        if self.entry_by_key(key):
+            return 'Key "{}" is already used by another keynote.'.format(key)
+        if self.find_category(key):
+            return 'Key "{}" is already used by a category.'.format(key)
+        return None
+
+    @property
+    def added(self):
+        """Keys of entries created this session, in creation order."""
+        return list(self._added)
+
+    def has_changes(self, key_map):
+        """
+        True when there is anything to write.
+
+        New keynotes produce no old->new mapping, so a key_map-only test would
+        report 'nothing to do' and silently drop them.
+        """
+        return bool(key_map) or bool(self._added)
 
     # ── Entry operations ──────────────────────────────────────────────────────
 

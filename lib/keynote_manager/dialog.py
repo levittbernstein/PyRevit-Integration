@@ -42,7 +42,7 @@ from System.Windows import (
 from System.Windows.Controls import (
     TextBlock, TextBox, CheckBox, Grid, ColumnDefinition, RowDefinition,
 )
-from System.Windows.Input import Cursors
+from System.Windows.Input import Cursors, Key
 from System.Windows.Media import Brushes
 
 # DragDropEffects.None cannot be written literally — None is a Python keyword.
@@ -157,6 +157,7 @@ class KeynoteDialog(object):
         hook('CatUpBtn',      self._on_cat_up)
         hook('CatDownBtn',    self._on_cat_down)
 
+        hook('AddKeynoteBtn', self._on_add_keynote)
         hook('EntryUpBtn',    self._on_entry_up)
         hook('EntryDownBtn',  self._on_entry_down)
         hook('AssignBtn',     self._on_assign)
@@ -175,6 +176,12 @@ class KeynoteDialog(object):
         hook('UsePrefixCb',   self._on_option_changed, 'Checked')
         hook('RenumUncatCb',  self._on_option_changed, 'Checked')
         hook('PaddingBox',    self._on_option_changed, 'TextChanged')
+
+        # Enter in the new-keynote box adds it, so a run of keynotes can be
+        # typed without reaching for the mouse.
+        box = w.FindName('NewKeynoteText')
+        if box is not None:
+            box.KeyDown += self._on_new_keynote_key
 
     # ── Remembered preferences ────────────────────────────────────────────────
 
@@ -534,20 +541,26 @@ class KeynoteDialog(object):
         problems = self._model.validate_new_keys(self._key_map)
         affected = sum(len(self._refs.get(k, [])) for k in self._key_map)
         n_manual = len(self._overrides)
+        n_added  = len(self._model.added)
 
         if problems:
             self._status(u'{} problem(s) must be fixed: {}'.format(
                 len(problems), problems[0]), error=True)
-        elif not self._key_map:
-            self._status(u'No key changes yet. Create a category and assign '
-                         u'keynotes to it, type a key in the NEW column, or '
-                         u'enable flat renumbering.')
+        elif not self._model.has_changes(self._key_map):
+            self._status(u'No changes yet. Add a keynote, create a category and '
+                         u'assign keynotes to it, type a key in the NEW column, '
+                         u'or enable flat renumbering.')
         else:
-            extra = u' ({} set manually)'.format(n_manual) if n_manual else u''
-            self._status(u'{} key change(s) pending{}, affecting {} model '
-                         u'reference(s). Nothing is written until you press '
-                         u'Update model.'.format(
-                             len(self._key_map), extra, affected))
+            parts = []
+            if self._key_map:
+                extra = u' ({} manual)'.format(n_manual) if n_manual else u''
+                parts.append(u'{} key change(s){}'.format(
+                    len(self._key_map), extra))
+            if n_added:
+                parts.append(u'{} new keynote(s)'.format(n_added))
+            self._status(u'{} pending, affecting {} model reference(s). Nothing '
+                         u'is written until you press Update model.'.format(
+                             u' and '.join(parts), affected))
 
     def _status(self, text, error=False):
         tb = self._win.FindName('StatusText')
@@ -637,6 +650,42 @@ class KeynoteDialog(object):
                 found = self._model.find_category(cat.key)
                 if found is not None:
                     lb.SelectedIndex = self._model.categories.index(found)
+
+    # ── Adding keynotes ───────────────────────────────────────────────────────
+
+    def _on_new_keynote_key(self, sender, e):
+        if e.Key == Key.Enter:
+            self._on_add_keynote(sender, e)
+            e.Handled = True
+
+    def _on_add_keynote(self, sender, e):
+        box = self._win.FindName('NewKeynoteText')
+        text = str(box.Text).strip() if box is not None else ''
+        if not text:
+            self._status('Type the keynote text first.', error=True)
+            return
+
+        # Goes into whichever category is selected above, so adding several to
+        # one category needs no extra step.
+        cat = self._selected_category()
+        cat_key = cat.key if cat is not None else None
+
+        self._flush_edits()
+        try:
+            entry = self._model.add_entry(
+                text, category_key=cat_key, padding=self._padding())
+        except ValueError as exc:
+            self._status(str(exc), error=True)
+            return
+
+        if box is not None:
+            box.Text = ''
+            box.Focus()
+
+        self._refresh_all()
+        self._status('Added keynote {} in {}. It is written to the keynote file '
+                     'when you press Update model.'.format(
+                         entry.key, cat_key or 'uncategorised'))
 
     # ── Entry handlers ────────────────────────────────────────────────────────
 
@@ -750,9 +799,8 @@ class KeynoteDialog(object):
     def _on_preview(self, sender, e):
         self._flush_edits()
         self._recompute()
-        if not self._key_map:
-            self._status('Nothing to preview — no keys would change.',
-                         error=True)
+        if not self._model.has_changes(self._key_map):
+            self._status('Nothing to preview — no changes pending.', error=True)
             return
 
         report = ksync.plan(self._model, self._refs, self._key_map)
@@ -773,17 +821,25 @@ class KeynoteDialog(object):
                      'would do.')
         out.print_md(
             '- **{key_changes}** key change(s)\n'
+            '- **{added}** new keynote(s)\n'
             '- **{merges}** merge(s)\n'
             '- References to update: **{t}** tags, **{ty}** types, '
             '**{m}** materials\n'
             '- **{unreferenced}** changed key(s) are not referenced anywhere '
             'in this model'.format(
                 key_changes=report['key_changes'],
+                added=len(report['added']),
                 merges=report['merges'],
                 t=report['totals']['tag'],
                 ty=report['totals']['type'],
                 m=report['totals']['material'],
                 unreferenced=report['unreferenced']))
+
+        if report['added']:
+            out.print_md('## New keynotes')
+            out.print_table(
+                table_data=[[k, (t or '')[:80]] for k, t in report['added']],
+                columns=['Key', 'Keynote text'])
 
         rows = [[r['old'], r['new'],
                  'merge' if r['merged'] else '',
@@ -798,9 +854,8 @@ class KeynoteDialog(object):
     def _on_update(self, sender, e):
         self._flush_edits()
         self._recompute()
-        if not self._key_map:
-            self._status('Nothing to update — no keys would change.',
-                         error=True)
+        if not self._model.has_changes(self._key_map):
+            self._status('Nothing to update — no changes pending.', error=True)
             return
         problems = self._model.validate_new_keys(self._key_map)
         if problems:

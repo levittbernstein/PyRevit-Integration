@@ -174,6 +174,24 @@
       <StackPanel Grid.Row="2" Margin="0,8,0,0">
         <TextBlock Style="{StaticResource ListLabel}"
                    Text="Drag the ≡ handle to reorder, or drop onto a category header to move a keynote into it. NEW and KEYNOTE TEXT are editable."/>
+
+        <!-- Add a brand-new keynote -->
+        <Grid Margin="0,0,0,6">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Grid.Column="0" Style="{StaticResource FieldLabel}"
+                     Text="New keynote:" Margin="0,0,6,0"/>
+          <TextBox x:Name="NewKeynoteText" Grid.Column="1"
+                   Style="{StaticResource FieldBox}" Margin="0,0,5,0"
+                   ToolTip="Keynote description. Press Enter or click Add. Goes into the category selected above, or uncategorised if none is selected."/>
+          <Button x:Name="AddKeynoteBtn" Grid.Column="2"
+                  Style="{StaticResource SmallButton}"
+                  Content="Add keynote" MinWidth="100" Margin="0"/>
+        </Grid>
+
         <StackPanel Orientation="Horizontal">
           <Button x:Name="EntryUpBtn" Style="{StaticResource SmallButton}" Content="Move Up"/>
           <Button x:Name="EntryDownBtn" Style="{StaticResource SmallButton}" Content="Move Down"/>
