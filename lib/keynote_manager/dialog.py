@@ -52,6 +52,7 @@ _NO_EFFECT = getattr(DragDropEffects, 'None_',
 
 from keynote_manager import renumber as rn
 from keynote_manager import sync as ksync
+from keynote_manager import settings as ksettings
 
 
 def _load_xaml(path):
@@ -72,12 +73,14 @@ _DRAG_FORMAT   = 'LBKeynoteKey'
 
 class KeynoteDialog(object):
 
-    def __init__(self, model, meta, file_path, refs_by_key, ref_stats):
+    def __init__(self, model, meta, file_path, refs_by_key, ref_stats,
+                 settings_key=None):
         self._model     = model
         self._meta      = meta
         self._path      = file_path
         self._refs      = refs_by_key
         self._ref_stats = ref_stats
+        self._skey      = settings_key
 
         self._action     = 'close'
         self._key_map    = {}
@@ -99,6 +102,9 @@ class KeynoteDialog(object):
 
         self._setup_file_info()
         self._setup_dragdrop()
+        # Restore preferences BEFORE wiring, so setting IsChecked does not fire
+        # the change handler while the grid does not yet exist.
+        self._restore_settings()
         self._wire()
         self._refresh_all()
 
@@ -169,6 +175,29 @@ class KeynoteDialog(object):
         hook('UsePrefixCb',   self._on_option_changed, 'Checked')
         hook('RenumUncatCb',  self._on_option_changed, 'Checked')
         hook('PaddingBox',    self._on_option_changed, 'TextChanged')
+
+    # ── Remembered preferences ────────────────────────────────────────────────
+
+    def _restore_settings(self):
+        values = ksettings.load(self._skey)
+
+        cb = self._win.FindName('UsePrefixCb')
+        if cb is not None:
+            cb.IsChecked = bool(values.get('use_prefix', True))
+
+        box = self._win.FindName('PaddingBox')
+        if box is None:
+            return
+        try:
+            box.Text = str(int(values.get('padding', rn.DEFAULT_PADDING)))
+        except (TypeError, ValueError):
+            box.Text = str(rn.DEFAULT_PADDING)
+
+    def _persist_settings(self):
+        ksettings.save(self._skey, {
+            'use_prefix': self._use_prefix(),
+            'padding':    self._padding(),
+        })
 
     # ── Options ───────────────────────────────────────────────────────────────
 
@@ -794,6 +823,9 @@ class KeynoteDialog(object):
         to run the apply, so the dialog itself never opens a transaction.
         """
         self._win.ShowDialog()
+        # Saved on either exit path — Update or Close — so the preference sticks
+        # even when the user only came in to look.
+        self._persist_settings()
         return self._action, {
             'model':   self._model,
             'meta':    self._meta,

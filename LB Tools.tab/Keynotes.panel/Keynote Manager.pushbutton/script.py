@@ -31,6 +31,7 @@ if _EXT_LIB not in sys.path:
 
 from keynote_manager import keynote_file as kfile      # noqa: E402
 from keynote_manager import keynote_reader as kreader  # noqa: E402
+from keynote_manager import settings as ksettings      # noqa: E402
 from keynote_manager import sync as ksync              # noqa: E402
 from keynote_manager.renumber import KeynoteModel      # noqa: E402
 from keynote_manager.dialog import KeynoteDialog       # noqa: E402
@@ -135,7 +136,9 @@ else:
                             title='Orphaned keynote references', warn_icon=True)
 
                     # ── Dialog ───────────────────────────────────────────────
-                    dlg = KeynoteDialog(model, meta, path, refs_by_key, ref_stats)
+                    dlg = KeynoteDialog(model, meta, path, refs_by_key,
+                                        ref_stats,
+                                        settings_key=ksettings.project_key(doc))
                     action, state = dlg.show()
 
                     if action == 'update' and state['key_map']:
