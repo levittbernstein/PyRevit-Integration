@@ -379,6 +379,17 @@ class KeynoteDialog(object):
         if scroller is not None:
             scroller.ScrollToVerticalOffset(offset)
 
+    def _clear_checks(self):
+        """
+        Untick everything.
+
+        Must run BEFORE a grid rebuild: _build_keynote_grid() carries the
+        current ticks across a rebuild, so clearing afterwards would be undone
+        by the next refresh.
+        """
+        for cb in self._checks.values():
+            cb.IsChecked = False
+
     def _checked(self):
         """Keys of every ticked row, in display order."""
         ordered = []
@@ -634,6 +645,9 @@ class KeynoteDialog(object):
         self._flush_edits()
         cat_key = self._assign_keys[combo.SelectedIndex]
         self._model.assign(keys, cat_key)
+        # The selection is spent once assigned — leaving it ticked makes the
+        # next assignment silently re-move the same keynotes.
+        self._clear_checks()
         self._refresh_all()
         self._status('Assigned {} keynote(s) to "{}".'.format(
             len(keys), cat_key))
@@ -646,6 +660,7 @@ class KeynoteDialog(object):
             return
         self._flush_edits()
         self._model.assign(keys, None)
+        self._clear_checks()
         self._refresh_all()
         self._status('Removed {} keynote(s) from their category.'.format(
             len(keys)))
@@ -674,8 +689,7 @@ class KeynoteDialog(object):
             cb.IsChecked = True
 
     def _on_select_none(self, sender, e):
-        for cb in self._checks.values():
-            cb.IsChecked = False
+        self._clear_checks()
 
     def _on_merge(self, sender, e):
         lb = self._win.FindName('DuplicateList')
