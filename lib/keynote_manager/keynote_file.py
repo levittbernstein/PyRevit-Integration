@@ -51,12 +51,15 @@ BACKUP_DIRNAME = '_LB_keynote_backups'
 class FileMeta(object):
     """Everything needed to write a file back exactly as it was found."""
 
-    def __init__(self, bom, codec, newline, trailing_newline, comments):
+    def __init__(self, bom, codec, newline, trailing_newline, passthrough):
         self.bom              = bom               # bytes, b'' if none
         self.codec            = codec             # python codec name
         self.newline          = newline           # u'\r\n' or u'\n'
         self.trailing_newline = trailing_newline  # bool
-        self.comments         = comments          # [(index, raw_line)] preserved verbatim
+        # Lines that are not keynote entries — comments and blanks — as
+        # [(line_index, raw_line)].  Held with their original index so they can
+        # be written back in position rather than hoisted to the top.
+        self.passthrough      = passthrough
 
     def describe(self):
         enc = self.codec.upper()
@@ -67,22 +70,53 @@ class FileMeta(object):
 
 
 class KeynoteEntry(object):
-    """One row of the keynote file."""
+    """
+    One row of the keynote file.
 
-    __slots__ = ('key', 'text', 'parent')
+    *raw* is the original line, verbatim, and *origin* is the (key, text,
+    parent) triple parsed out of it.  Any entry the user has not edited is
+    written back as its original line rather than regenerated, which makes
+    round-tripping exact regardless of formatting quirks the parser would
+    otherwise normalise away — trailing tabs (which Revit's own sample keynote
+    files use on category rows), double spaces, padding whitespace.
+    """
 
-    def __init__(self, key, text, parent=u''):
+    __slots__ = ('key', 'text', 'parent', 'raw', 'origin')
+
+    def __init__(self, key, text, parent=u'', raw=None, origin=None):
         self.key    = key
         self.text   = text
         self.parent = parent or u''
+        self.raw    = raw
+        self.origin = origin if origin is not None else (key, text, parent or u'')
 
     @property
     def is_category(self):
         """True when this entry has no parent — Revit renders these as branches."""
         return not self.parent
 
+    @property
+    def is_unchanged(self):
+        """True when this entry still matches the line it was parsed from."""
+        return (self.raw is not None
+                and (self.key, self.text, self.parent) == self.origin)
+
+    def derive(self, key=None, parent=None):
+        """
+        Copy with a possibly-new key or parent, carrying provenance.
+
+        Keeping raw/origin across the copy is what lets to_entries() rebuild the
+        whole file while still emitting untouched rows byte-for-byte.
+        """
+        return KeynoteEntry(
+            self.key if key is None else key,
+            self.text,
+            self.parent if parent is None else parent,
+            raw=self.raw,
+            origin=self.origin)
+
     def clone(self):
-        return KeynoteEntry(self.key, self.text, self.parent)
+        return self.derive()
 
     def __repr__(self):
         return 'KeynoteEntry({!r}, {!r}, {!r})'.format(
@@ -124,16 +158,23 @@ def read_keynote_file(path):
     newline          = u'\r\n' if u'\r\n' in text else u'\n'
     trailing_newline = text.endswith(newline)
 
-    problems = []
-    entries  = []
-    comments = []
+    problems    = []
+    entries     = []
+    passthrough = []
 
-    for idx, line in enumerate(text.split(newline)):
-        if not line.strip():
-            continue
+    parts = text.split(newline)
+    # A trailing newline leaves a final empty element that is an artefact of the
+    # split, not a blank line in the file. Dropping it here stops it being
+    # re-emitted as an extra blank line on write.
+    if trailing_newline and parts and parts[-1] == u'':
+        parts = parts[:-1]
 
-        if line.lstrip().startswith(u'#'):
-            comments.append((idx, line))
+    for idx, line in enumerate(parts):
+        # Blank lines and comments are carried through verbatim at their
+        # original position — Revit ignores them, but silently deleting a
+        # colleague's comments would be unacceptable.
+        if not line.strip() or line.lstrip().startswith(u'#'):
+            passthrough.append((idx, line))
             continue
 
         fields = line.split(u'\t')
@@ -151,9 +192,9 @@ def read_keynote_file(path):
                 'Extra fields ignored — check for stray tabs in the keynote '
                 'text.'.format(idx + 1, key, len(fields)))
 
-        entries.append(KeynoteEntry(key, body, parent))
+        entries.append(KeynoteEntry(key, body, parent, raw=line))
 
-    meta = FileMeta(bom, codec, newline, trailing_newline, comments)
+    meta = FileMeta(bom, codec, newline, trailing_newline, passthrough)
     return entries, meta, problems
 
 
@@ -174,19 +215,41 @@ def is_pyrevit_managed(path):
 
 # ── Writing ───────────────────────────────────────────────────────────────────
 
+def _render(e):
+    """One entry as a file line."""
+    # Untouched rows go back exactly as they came in, so formatting the parser
+    # would normalise away (trailing tabs, padding spaces) survives.
+    if e.is_unchanged:
+        return e.raw
+    if e.parent:
+        return u'{}\t{}\t{}'.format(e.key, e.text, e.parent)
+    return u'{}\t{}'.format(e.key, e.text)
+
+
 def serialise(entries, meta):
-    """Render *entries* to the exact byte string that should hit disk."""
+    """
+    Render *entries* to the exact byte string that should hit disk.
+
+    Comments and blank lines are re-inserted at their original line indices and
+    entries fill the gaps between them, so a file that has not been edited
+    reproduces byte-for-byte.  When entries have been added or merged away the
+    indices no longer line up perfectly, but the passthrough lines still land in
+    the same absolute positions and the file stays valid — Revit ignores both
+    ordering and comments.
+    """
+    passthrough = dict(meta.passthrough)
+    last_pass   = max(passthrough.keys()) if passthrough else -1
+
     lines = []
-
-    # Preserve any comment lines that were in the original file, in place.
-    for _idx, raw_line in meta.comments:
-        lines.append(raw_line)
-
-    for e in entries:
-        if e.parent:
-            lines.append(u'{}\t{}\t{}'.format(e.key, e.text, e.parent))
-        else:
-            lines.append(u'{}\t{}'.format(e.key, e.text))
+    ei = 0
+    i  = 0
+    while ei < len(entries) or i <= last_pass:
+        if i in passthrough:
+            lines.append(passthrough[i])
+        elif ei < len(entries):
+            lines.append(_render(entries[ei]))
+            ei += 1
+        i += 1
 
     body = meta.newline.join(lines)
     if meta.trailing_newline:
@@ -277,7 +340,41 @@ def test_roundtrip(path):
         return True, 'Round-trip exact ({} bytes, {}).'.format(
             len(original), meta.describe())
 
-    return False, (
-        'Round-trip differs: {} bytes in, {} bytes out ({}). '
-        'Refusing to rewrite this file.'.format(
-            len(original), len(rebuilt), meta.describe()))
+    # Byte counts alone are useless for fixing the problem — locate and quote
+    # the first line that differs.
+    detail = ['Round-trip differs: {} bytes in, {} bytes out ({}).'.format(
+        len(original), len(rebuilt), meta.describe())]
+
+    try:
+        want = original[len(meta.bom):].decode(meta.codec, 'replace')
+        got  = rebuilt[len(meta.bom):].decode(meta.codec, 'replace')
+        wl = want.split(meta.newline)
+        gl = got.split(meta.newline)
+
+        for i in range(max(len(wl), len(gl))):
+            a = wl[i] if i < len(wl) else None
+            b = gl[i] if i < len(gl) else None
+            if a != b:
+                detail.append('First difference at line {}:'.format(i + 1))
+                detail.append('  in  : {}'.format(_visible(a)))
+                detail.append('  out : {}'.format(_visible(b)))
+                break
+        else:
+            if len(wl) != len(gl):
+                detail.append('Line count differs: {} in, {} out.'.format(
+                    len(wl), len(gl)))
+    except Exception:
+        pass
+
+    detail.append('Refusing to rewrite this file.')
+    return False, '\n'.join(detail)
+
+
+def _visible(line):
+    """Render a line with tabs and trailing spaces made visible."""
+    if line is None:
+        return '(line absent)'
+    shown = line.replace(u'\t', u'\\t').replace(u'\r', u'\\r')
+    if line != line.rstrip():
+        shown += u'   <- has trailing whitespace'
+    return u'"{}"'.format(shown)

@@ -35,10 +35,13 @@ _CATEGORY_KEY_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_.\-]{0,7}$')
 class Category(object):
     """A parent row plus its ordered children."""
 
-    def __init__(self, key, text):
+    def __init__(self, key, text, source=None):
         self.key      = key
         self.text     = text
         self.children = []   # ordered list of KeynoteEntry
+        # The entry this category was parsed from, if any.  Kept so its original
+        # line can be re-emitted verbatim when the category is untouched.
+        self.source   = source
 
     def __repr__(self):
         return 'Category({!r}, {!r}, {} children)'.format(
@@ -85,7 +88,7 @@ class KeynoteModel(object):
             if e.parent:
                 continue
             if e.key in children:
-                cat = Category(e.key, e.text)
+                cat = Category(e.key, e.text, source=e)
                 cat.children = list(children[e.key])
                 self.categories.append(cat)
             else:
@@ -510,20 +513,32 @@ class KeynoteModel(object):
         """
         out = []
         for cat in self.categories:
-            out.append(_mk(cat.key, cat.text, u''))
+            out.append(_category_row(cat))
             for child in cat.children:
-                out.append(_mk(key_map.get(child.key, child.key),
-                               child.text, cat.key))
+                out.append(child.derive(key=key_map.get(child.key, child.key),
+                                        parent=cat.key))
         for entry in self.uncategorised:
-            out.append(_mk(key_map.get(entry.key, entry.key), entry.text, u''))
+            out.append(entry.derive(key=key_map.get(entry.key, entry.key),
+                                    parent=u''))
         return out
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _mk(key, text, parent):
+def _category_row(cat):
+    """
+    The file row for a category.
+
+    Derived from the entry it was parsed from where possible, so an untouched
+    category keeps its original line verbatim (Revit's own keynote files put
+    trailing tabs on these rows).
+    """
     from keynote_manager.keynote_file import KeynoteEntry
-    return KeynoteEntry(key, text, parent)
+    if cat.source is not None:
+        out = cat.source.derive(key=cat.key, parent=u'')
+        out.text = cat.text
+        return out
+    return KeynoteEntry(cat.key, cat.text, u'')
 
 
 def _padded(number, padding):
