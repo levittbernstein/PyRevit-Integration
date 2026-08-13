@@ -2,19 +2,19 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="LB Keynote Manager"
-    Width="1020" Height="900"
-    MinWidth="860" MinHeight="640"
+    Width="1180" Height="960"
+    MinWidth="980" MinHeight="720"
     WindowStartupLocation="CenterScreen"
     ResizeMode="CanResizeWithGrip"
     Background="#F4F4F4"
     FontFamily="Founders Grotesk Regular, Arial"
-    FontSize="12">
+    FontSize="14">
 
   <Window.Resources>
 
     <Style x:Key="SectionHeader" TargetType="TextBlock">
       <Setter Property="FontFamily" Value="Founders Grotesk Medium, Arial"/>
-      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontSize" Value="13"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="White"/>
       <Setter Property="Background" Value="#111111"/>
@@ -22,19 +22,19 @@
     </Style>
 
     <Style x:Key="FieldLabel" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontSize" Value="13"/>
       <Setter Property="Foreground" Value="#333333"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
     <Style x:Key="MetaLabel" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="Foreground" Value="#666666"/>
       <Setter Property="VerticalAlignment" Value="Center"/>
     </Style>
 
     <Style x:Key="FieldBox" TargetType="TextBox">
-      <Setter Property="Height" Value="26"/>
+      <Setter Property="Height" Value="30"/>
       <Setter Property="Padding" Value="6,3"/>
       <Setter Property="BorderBrush" Value="#CCCCCC"/>
       <Setter Property="BorderThickness" Value="1"/>
@@ -43,8 +43,8 @@
     </Style>
 
     <Style x:Key="ActionButton" TargetType="Button">
-      <Setter Property="Height" Value="32"/>
-      <Setter Property="MinWidth" Value="120"/>
+      <Setter Property="Height" Value="38"/>
+      <Setter Property="MinWidth" Value="140"/>
       <Setter Property="Background" Value="#111111"/>
       <Setter Property="Foreground" Value="White"/>
       <Setter Property="BorderThickness" Value="0"/>
@@ -57,18 +57,20 @@
     </Style>
 
     <Style x:Key="SmallButton" TargetType="Button">
-      <Setter Property="Height" Value="26"/>
-      <Setter Property="MinWidth" Value="84"/>
-      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="Height" Value="30"/>
+      <Setter Property="MinWidth" Value="100"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="Background" Value="#444444"/>
       <Setter Property="Foreground" Value="White"/>
       <Setter Property="BorderThickness" Value="0"/>
       <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="Margin" Value="0,0,5,0"/>
+      <!-- Bottom margin matters: these buttons live in a WrapPanel, and
+           wrapped rows would otherwise sit flush against each other. -->
+      <Setter Property="Margin" Value="0,0,5,5"/>
     </Style>
 
     <Style x:Key="ListLabel" TargetType="TextBlock">
-      <Setter Property="FontSize" Value="10"/>
+      <Setter Property="FontSize" Value="12"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="Foreground" Value="#555555"/>
       <Setter Property="Margin" Value="0,0,0,3"/>
@@ -118,14 +120,14 @@
           <StackPanel Grid.Column="0" Margin="0,0,10,0">
             <TextBlock Style="{StaticResource ListLabel}"
                        Text="Category key becomes the keynote prefix (e.g. R = Railings gives R01, R02)"/>
-            <ListBox x:Name="CategoryList" Height="104"
+            <ListBox x:Name="CategoryList" Height="124"
                      BorderBrush="#DDDDDD" BorderThickness="1"/>
           </StackPanel>
 
-          <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Width="200">
+          <StackPanel Grid.Column="1" VerticalAlignment="Bottom" Width="230">
             <Grid Margin="0,0,0,5">
               <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="54"/>
                 <ColumnDefinition Width="*"/>
               </Grid.ColumnDefinitions>
               <TextBox x:Name="NewCatKey" Grid.Column="0"
@@ -163,7 +165,10 @@
 
       <TextBlock Grid.Row="0" Style="{StaticResource SectionHeader}" Text="KEYNOTES"/>
 
-      <Border Grid.Row="1" Style="{StaticResource PanelBorder}">
+      <!-- MinHeight so the list cannot be squeezed to nothing: every Auto row
+           around it grew with the font, and when the duplicates panel is also
+           visible the star row is what gives way first. -->
+      <Border Grid.Row="1" Style="{StaticResource PanelBorder}" MinHeight="170">
         <ScrollViewer x:Name="KeynoteScroller"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
@@ -189,23 +194,27 @@
                    ToolTip="Keynote description. Press Enter or click Add. Goes into the category selected above, or uncategorised if none is selected."/>
           <Button x:Name="AddKeynoteBtn" Grid.Column="2"
                   Style="{StaticResource SmallButton}"
-                  Content="Add keynote" MinWidth="100" Margin="0"/>
+                  Content="Add keynote" MinWidth="118" Margin="0"/>
         </Grid>
 
-        <StackPanel Orientation="Horizontal">
+        <!-- WrapPanel, not StackPanel: at the larger font these controls need
+             ~1190px and only ~1148 are available, so a horizontal StackPanel
+             would clip the last buttons off the right edge. Wrapping also keeps
+             every button reachable when the window is resized narrow. -->
+        <WrapPanel Orientation="Horizontal">
           <Button x:Name="EntryUpBtn" Style="{StaticResource SmallButton}" Content="Move Up"/>
           <Button x:Name="EntryDownBtn" Style="{StaticResource SmallButton}" Content="Move Down"/>
           <TextBlock Style="{StaticResource FieldLabel}" Text="Assign to:" Margin="12,0,6,0"/>
-          <ComboBox x:Name="AssignCombo" Width="140" Height="26" Margin="0,0,5,0"/>
+          <ComboBox x:Name="AssignCombo" Width="160" Height="30" Margin="0,0,5,5"/>
           <Button x:Name="AssignBtn" Style="{StaticResource SmallButton}" Content="Assign"/>
           <Button x:Name="UnassignBtn" Style="{StaticResource SmallButton}"
-                  Content="Remove from category" MinWidth="138"/>
+                  Content="Remove from category" MinWidth="160"/>
           <Button x:Name="SortBtn" Style="{StaticResource SmallButton}" Content="Sort by text"/>
           <Button x:Name="ResetKeysBtn" Style="{StaticResource SmallButton}"
-                  Content="Reset manual keys" MinWidth="118"/>
+                  Content="Reset manual keys" MinWidth="138"/>
           <Button x:Name="SelectAllBtn" Style="{StaticResource SmallButton}" Content="Select all"/>
           <Button x:Name="SelectNoneBtn" Style="{StaticResource SmallButton}" Content="Clear"/>
-        </StackPanel>
+        </WrapPanel>
       </StackPanel>
     </Grid>
 
@@ -219,7 +228,7 @@
                       IsChecked="True" VerticalAlignment="Center"/>
             <TextBlock Style="{StaticResource FieldLabel}" Text="Digits:" Margin="20,0,6,0"/>
             <TextBox x:Name="PaddingBox" Style="{StaticResource FieldBox}"
-                     Width="40" Text="2"/>
+                     Width="48" Text="2"/>
             <TextBlock x:Name="ModeHintText" Style="{StaticResource MetaLabel}"
                        Margin="16,0,0,0" Text=""/>
           </StackPanel>
@@ -237,11 +246,11 @@
         <StackPanel>
           <TextBlock x:Name="DuplicateInfo" Style="{StaticResource MetaLabel}"
                      TextWrapping="Wrap" Margin="0,0,0,6" Text=""/>
-          <ListBox x:Name="DuplicateList" Height="72"
+          <ListBox x:Name="DuplicateList" Height="88"
                    BorderBrush="#DDDDDD" BorderThickness="1"/>
           <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
             <Button x:Name="MergeBtn" Style="{StaticResource SmallButton}"
-                    Content="Merge selected" MinWidth="120"/>
+                    Content="Merge selected" MinWidth="140"/>
             <TextBlock Style="{StaticResource MetaLabel}" VerticalAlignment="Center"
                        Text="Keeps the lowest key and repoints all references onto it."/>
           </StackPanel>

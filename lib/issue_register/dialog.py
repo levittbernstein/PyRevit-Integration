@@ -196,18 +196,18 @@ class ExportDialog(object):
         # ── Column definitions ────────────────────────────────────────
         # Col 0: recipient name (170px)
         cd = ColumnDefinition()
-        cd.Width = GridLength(170)
+        cd.Width = GridLength(200)
         container.ColumnDefinitions.Add(cd)
 
         # Cols 1..n: one per issue date (70px each)
         for _ in range(n_issues):
             cd = ColumnDefinition()
-            cd.Width = GridLength(70)
+            cd.Width = GridLength(80)
             container.ColumnDefinitions.Add(cd)
 
         # ── Header row ────────────────────────────────────────────────
         rd = RowDefinition()
-        rd.Height = GridLength(46)
+        rd.Height = GridLength(54)
         container.RowDefinitions.Add(rd)
 
         self._header_cell(container, 'RECIPIENT', 0, 0)
@@ -218,13 +218,13 @@ class ExportDialog(object):
         if not self._recipients:
             # Placeholder row
             rd = RowDefinition()
-            rd.Height = GridLength(36)
+            rd.Height = GridLength(42)
             container.RowDefinitions.Add(rd)
 
             ph = TextBlock()
             ph.Text = "Click '+ Add recipient' below to add rows."
             ph.Foreground = Brushes.Gray
-            ph.FontSize = 11
+            ph.FontSize = 13
             ph.VerticalAlignment = VerticalAlignment.Center
             ph.Margin = Thickness(10, 0, 0, 0)
             Grid.SetRow(ph, 1)
@@ -238,7 +238,7 @@ class ExportDialog(object):
 
         for row_idx, recipient in enumerate(self._recipients):
             rd = RowDefinition()
-            rd.Height = GridLength(28)
+            rd.Height = GridLength(34)
             container.RowDefinitions.Add(rd)
 
             r_name = recipient.get('name', '')
@@ -252,7 +252,7 @@ class ExportDialog(object):
             name_box.BorderBrush             = Brushes.LightGray
             name_box.BorderThickness         = Thickness(0, 0, 1, 1)
             name_box.Background              = bg
-            name_box.FontSize                = 11
+            name_box.FontSize                = 13
             name_box.VerticalContentAlignment = VerticalAlignment.Center
             name_box.GotFocus += self._make_focus_handler(row_idx)
             Grid.SetRow(name_box, row_idx + 1)
@@ -272,7 +272,7 @@ class ExportDialog(object):
                 cell.BorderBrush              = Brushes.LightGray
                 cell.BorderThickness          = Thickness(0, 0, 1, 1)
                 cell.Background               = bg
-                cell.FontSize                 = 10
+                cell.FontSize                 = 12
                 cell.TextAlignment            = TextAlignment.Center
                 cell.VerticalContentAlignment = VerticalAlignment.Center
                 cell.MaxLength                = 3
@@ -302,7 +302,7 @@ class ExportDialog(object):
         tb = TextBlock()
         tb.Text              = text
         tb.TextWrapping      = TextWrapping.Wrap
-        tb.FontSize          = 9
+        tb.FontSize          = 11
         tb.TextAlignment     = TextAlignment.Center
         tb.VerticalAlignment = VerticalAlignment.Center
         tb.Background        = Brushes.Black
@@ -468,16 +468,16 @@ class ExportDialog(object):
 
         # Column definitions: col 0 = package name (160px), cols 1..n = issue dates (70px)
         cd = ColumnDefinition()
-        cd.Width = GridLength(160)
+        cd.Width = GridLength(190)
         container.ColumnDefinitions.Add(cd)
         for _ in range(n_issues):
             cd = ColumnDefinition()
-            cd.Width = GridLength(70)
+            cd.Width = GridLength(80)
             container.ColumnDefinitions.Add(cd)
 
         # Header row
         rd = RowDefinition()
-        rd.Height = GridLength(46)
+        rd.Height = GridLength(54)
         container.RowDefinitions.Add(rd)
 
         self._header_cell(container, 'PACKAGE', 0, 0)
@@ -489,7 +489,7 @@ class ExportDialog(object):
 
         for pkg_idx, pkg in enumerate(self._all_packages):
             rd = RowDefinition()
-            rd.Height = GridLength(28)
+            rd.Height = GridLength(34)
             container.RowDefinitions.Add(rd)
 
             bg = Brushes.White if pkg_idx % 2 == 0 else Brushes.WhiteSmoke
@@ -499,7 +499,7 @@ class ExportDialog(object):
             lbl.Text              = pkg
             lbl.Margin            = Thickness(6, 0, 6, 0)
             lbl.VerticalAlignment = VerticalAlignment.Center
-            lbl.FontSize          = 11
+            lbl.FontSize          = 13
             lbl.Background        = bg
             Grid.SetRow(lbl, pkg_idx + 1)
             Grid.SetColumn(lbl, 0)
@@ -518,8 +518,8 @@ class ExportDialog(object):
 
                 cb = ComboBox()
                 cb.Margin            = Thickness(1)
-                cb.FontSize          = 10
-                cb.Height            = 24
+                cb.FontSize          = 12
+                cb.Height            = 28
                 cb.VerticalAlignment = VerticalAlignment.Center
                 cb.BorderBrush       = Brushes.LightGray
                 cb.BorderThickness   = Thickness(0, 0, 1, 1)
@@ -579,16 +579,16 @@ class ExportDialog(object):
 
         # Column definitions: col 0 = package name (160px), cols 1..n = issue dates (70px)
         cd = ColumnDefinition()
-        cd.Width = GridLength(160)
+        cd.Width = GridLength(190)
         container.ColumnDefinitions.Add(cd)
         for _ in range(n_issues):
             cd = ColumnDefinition()
-            cd.Width = GridLength(70)
+            cd.Width = GridLength(80)
             container.ColumnDefinitions.Add(cd)
 
         # Header row
         rd = RowDefinition()
-        rd.Height = GridLength(46)
+        rd.Height = GridLength(54)
         container.RowDefinitions.Add(rd)
 
         self._header_cell(container, 'PACKAGE', 0, 0)
@@ -600,7 +600,7 @@ class ExportDialog(object):
 
         for pkg_idx, pkg in enumerate(self._included_packages):
             rd = RowDefinition()
-            rd.Height = GridLength(28)
+            rd.Height = GridLength(34)
             container.RowDefinitions.Add(rd)
 
             bg = Brushes.White if pkg_idx % 2 == 0 else Brushes.WhiteSmoke
@@ -610,7 +610,7 @@ class ExportDialog(object):
             lbl.Text              = pkg
             lbl.Margin            = Thickness(6, 0, 6, 0)
             lbl.VerticalAlignment = VerticalAlignment.Center
-            lbl.FontSize          = 11
+            lbl.FontSize          = 13
             lbl.Background        = bg
             Grid.SetRow(lbl, pkg_idx + 1)
             Grid.SetColumn(lbl, 0)

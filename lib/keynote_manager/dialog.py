@@ -61,11 +61,14 @@ def _load_xaml(path):
 
 
 # grip, check, old key, new key, keynote text, category
-_COLS = [18, 24, 56, 78, None, 92]
+# Widened along with the font: a key column sized for 11pt clips at 13pt.
+_COLS = [22, 28, 68, 94, None, 112]
 
-_HEADER_H = 22
-_GROUP_H  = 24
-_ROW_H    = 25
+_HEADER_H = 26
+_GROUP_H  = 29
+# Must clear the row's TextBox (Height 25) plus its 2px top and bottom margin,
+# or the editable cells are visibly cropped.
+_ROW_H    = 32
 
 _UNCATEGORISED = u'(uncategorised)'
 _DRAG_FORMAT   = 'LBKeynoteKey'
@@ -338,7 +341,7 @@ class KeynoteDialog(object):
             container.Children.Add(ctrl)
             return ctrl
 
-        def label(text, r, c, bold=False, brush=None, size=11, trim=False):
+        def label(text, r, c, bold=False, brush=None, size=13, trim=False):
             tb = TextBlock()
             tb.Text = text or u''
             tb.FontSize = size
@@ -356,8 +359,8 @@ class KeynoteDialog(object):
         def editbox(value, r, c, width=None):
             box = TextBox()
             box.Text = value or u''
-            box.FontSize = 11
-            box.Height = 21
+            box.FontSize = 13
+            box.Height = 25
             box.Margin = Thickness(2, 2, 3, 2)
             box.VerticalContentAlignment = VerticalAlignment.Center
             box.BorderBrush = Brushes.Gainsboro
@@ -369,12 +372,12 @@ class KeynoteDialog(object):
         r = add_row(_HEADER_H)
         for idx, text in enumerate(
                 [u'', u'', u'KEY', u'NEW', u'KEYNOTE TEXT', u'CATEGORY']):
-            label(text, r, idx, bold=True, brush=Brushes.Gray, size=10)
+            label(text, r, idx, bold=True, brush=Brushes.Gray, size=12)
 
         def group_row(title, count, cat_key):
             gr = add_row(_GROUP_H, 'group', cat_key)
             tb = label(u'{}   ({})'.format(title, count), gr, 0,
-                       bold=True, size=11)
+                       bold=True, size=13)
             Grid.SetColumnSpan(tb, len(_COLS))
             tb.Foreground = Brushes.White
             tb.Background = Brushes.DimGray
@@ -384,14 +387,17 @@ class KeynoteDialog(object):
         def entry_row(entry, cat_key):
             er = add_row(_ROW_H, 'entry', entry.key)
 
-            grip = label(u'≡', er, 0, brush=Brushes.Silver, size=13)
+            grip = label(u'≡', er, 0, brush=Brushes.Silver, size=15)
             grip.Cursor = Cursors.SizeAll
             grip.ToolTip = 'Drag to reorder, or onto a category header'
             grip.MouseLeftButtonDown += self._on_grip_down
             self._grip_keys[grip] = entry.key
 
             cb = CheckBox()
-            cb.Margin = Thickness(3, 5, 0, 0)
+            # Centre vertically rather than nudging with a top margin, which
+            # would need retuning every time the row height changes.
+            cb.Margin = Thickness(3, 0, 0, 0)
+            cb.VerticalAlignment = VerticalAlignment.Center
             cb.IsChecked = entry.key in checked_keys
             place(cb, er, 1)
             self._checks[entry.key] = cb
@@ -399,7 +405,7 @@ class KeynoteDialog(object):
             label(entry.key, er, 2)
             self._newboxes[entry.key]  = editbox(u'', er, 3)
             self._textboxes[entry.key] = editbox(entry.text, er, 4)
-            label(cat_key or u'', er, 5, brush=Brushes.Gray, size=10, trim=True)
+            label(cat_key or u'', er, 5, brush=Brushes.Gray, size=12, trim=True)
 
         for cat in self._model.categories:
             group_row(u'{}  {}'.format(cat.key, cat.text or u''),

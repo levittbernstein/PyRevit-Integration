@@ -1,6 +1,6 @@
 """Main application window."""
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
+from tkinter import ttk, filedialog, messagebox, simpledialog, font as tkfont
 import os
 
 from .canvas import HatchCanvas
@@ -8,11 +8,36 @@ from . import project as proj_mod
 from .pat_export import export_pat
 
 
+_FONT_BUMP = 2
+
+
+def _enlarge_default_fonts(bump=_FONT_BUMP):
+    """
+    Grow every named Tk font so labels, menus and entries match the larger
+    text used in the WPF dialogs.
+
+    Tk font sizes are points when positive and PIXELS when negative, and a more
+    negative value means a BIGGER font — so the two cases move in opposite
+    directions. Getting that backwards silently shrinks the UI.
+    """
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont',
+                 'TkTooltipFont', 'TkIconFont', 'TkFixedFont'):
+        try:
+            f = tkfont.nametofont(name)
+        except tk.TclError:
+            continue
+        size = f.cget('size')
+        f.configure(size=(size - bump) if size < 0 else (size + bump))
+
+
 class HatchApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Hatch Editor")
-        self.geometry("1200x800")
+        # Must run after Tk() exists (the named fonts do not exist before that)
+        # and before any widget is built, so everything picks up the new size.
+        _enlarge_default_fonts()
+        self.geometry("1360x900")
         self._proj = proj_mod.new_project()
         self._proj_path = None
         self._dirty = False
@@ -100,7 +125,7 @@ class HatchApp(tk.Tk):
         side.pack(side='right', fill='y')
         side.pack_propagate(False)
 
-        ttk.Label(side, text="Elements", font=('', 10, 'bold')).pack(anchor='w')
+        ttk.Label(side, text="Elements", font=('', 12, 'bold')).pack(anchor='w')
         self._el_list = tk.Listbox(side, width=22, selectmode='browse')
         self._el_list.pack(fill='both', expand=True, pady=4)
         self._el_list.bind('<<ListboxSelect>>', self._on_list_select)
