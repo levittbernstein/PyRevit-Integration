@@ -29,6 +29,37 @@ from revit_reader import (get_sheets_data, get_project_info, collect_issue_dates
 from storage      import load_settings, save_settings, check_and_acquire_ownership
 from dialog       import ExportDialog
 
+
+# ── Filename helpers ──────────────────────────────────────────────────────────
+def _safe_name_part(text):
+    """
+    Turn a free-text field into something safe to put in a filename.
+
+    The Register title is typed by the user, so it can contain anything.
+    Windows rejects \\ / : * ? " < > | outright and silently mangles names with
+    a trailing dot or space, and an over-long name can push the full path past
+    MAX_PATH once the chosen folder is prepended.
+
+    Returns '' when nothing usable is left, so the caller can fall back.
+    """
+    text = (text or '').strip()
+    if not text:
+        return ''
+
+    # Illegal characters and control characters alike become spaces rather than
+    # being deleted: dropping a tab out of "Reg<tab>ister" would silently weld
+    # two words into one.
+    cleaned = ''.join((' ' if (ord(c) < 32 or c in '\\/:*?"<>|') else c)
+                      for c in text)
+    # Collapse runs of whitespace into single hyphens, matching the hyphenated
+    # style of the rest of the filename.
+    cleaned = '-'.join(cleaned.split())
+    # Windows silently strips a trailing dot or space, so a name differing only
+    # by those would collide with an existing file.
+    cleaned = cleaned.strip('.-_ ')
+
+    return cleaned[:60].rstrip('.-_ ')
+
 # ── Find CPython ──────────────────────────────────────────────────────────────
 def _find_cpython():
     appdata = os.environ.get('APPDATA', '')
@@ -180,7 +211,13 @@ if confirmed:
             _reg_rev = updated_settings.get('register_revision', '').strip()
             _rev_suffix = ('_' + ''.join(c for c in _reg_rev if c.isalnum())) if _reg_rev else ''
 
-            _stem     = '{}{}-LB-Issue-Register{}'.format(_date_prefix, proj_num, _rev_suffix)
+            # Name the file after the Register title field, falling back to the
+            # old fixed name when it is blank.
+            _title_part = _safe_name_part(
+                updated_settings.get('register_title', '')) or 'LB-Issue-Register'
+
+            _stem     = '{}{}-{}{}'.format(
+                _date_prefix, proj_num, _title_part, _rev_suffix)
             xlsx_path = os.path.join(output_folder, _stem + '.xlsx')
             pdf_path  = os.path.join(output_folder, _stem + '.pdf')
 
