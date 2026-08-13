@@ -67,6 +67,15 @@ class KeynoteModel(object):
     # ── Construction ──────────────────────────────────────────────────────────
 
     def _load(self, entries):
+        # Snapshot the file as loaded, BEFORE any fix-ups below, so that
+        # repointing an orphaned parent registers as a change worth saving.
+        # has_changes() diffs against this rather than trying to enumerate every
+        # kind of edit — text edits, key changes, re-parenting, additions and
+        # merges are then all caught by one comparison instead of three
+        # special cases that each have to be remembered.
+        self._original_rows = set(
+            (e.key, e.text, e.parent) for e in entries)
+
         by_key   = dict((e.key, e) for e in entries)
         children = {}
 
@@ -268,14 +277,38 @@ class KeynoteModel(object):
         """Keys of entries created this session, in creation order."""
         return list(self._added)
 
+    def edited_entries(self):
+        """
+        Entries whose text has been edited since the file was read.
+
+        Reporting only — has_changes() does not depend on this.
+        """
+        return [e for e in self.all_entries()
+                if e.raw is not None and e.text != e.origin[1]]
+
+    def renamed_categories(self):
+        """Categories whose display text has been edited. Reporting only."""
+        return [c for c in self.categories
+                if c.source is not None and c.text != c.source.origin[1]]
+
     def has_changes(self, key_map):
         """
-        True when there is anything to write.
+        True when the file would come out different from how it went in.
 
-        New keynotes produce no old->new mapping, so a key_map-only test would
-        report 'nothing to do' and silently drop them.
+        Compared as a set of (key, text, parent) rows against the snapshot taken
+        at load.  This catches every kind of edit at once — text changes, key
+        changes, re-parenting, new keynotes, merged-away keynotes — where a test
+        based on key_map alone silently dropped new keynotes, and one based on
+        key_map plus additions silently dropped text edits.
+
+        Pure reordering is deliberately NOT a change: Revit sorts the keynote
+        browser by key, so moving a row without renumbering it has no effect on
+        anything, and treating it as a change would mean rewriting the file and
+        churning a workshared model for nothing.
         """
-        return bool(key_map) or bool(self._added)
+        current = set((e.key, e.text, e.parent)
+                      for e in self.to_entries(key_map))
+        return current != self._original_rows
 
     # ── Entry operations ──────────────────────────────────────────────────────
 

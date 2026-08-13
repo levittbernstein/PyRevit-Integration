@@ -542,14 +542,16 @@ class KeynoteDialog(object):
         affected = sum(len(self._refs.get(k, [])) for k in self._key_map)
         n_manual = len(self._overrides)
         n_added  = len(self._model.added)
+        n_edits  = (len(self._model.edited_entries())
+                    + len(self._model.renamed_categories()))
 
         if problems:
             self._status(u'{} problem(s) must be fixed: {}'.format(
                 len(problems), problems[0]), error=True)
         elif not self._model.has_changes(self._key_map):
-            self._status(u'No changes yet. Add a keynote, create a category and '
-                         u'assign keynotes to it, type a key in the NEW column, '
-                         u'or enable flat renumbering.')
+            self._status(u'No changes yet. Edit keynote text, add a keynote, '
+                         u'create a category and assign keynotes to it, type a '
+                         u'key in the NEW column, or enable flat renumbering.')
         else:
             parts = []
             if self._key_map:
@@ -558,9 +560,15 @@ class KeynoteDialog(object):
                     len(self._key_map), extra))
             if n_added:
                 parts.append(u'{} new keynote(s)'.format(n_added))
+            if n_edits:
+                parts.append(u'{} text edit(s)'.format(n_edits))
+            if not parts:
+                # has_changes() is true but nothing above accounts for it —
+                # a re-parenting that needed no renumber.
+                parts.append(u'category changes')
             self._status(u'{} pending, affecting {} model reference(s). Nothing '
                          u'is written until you press Update model.'.format(
-                             u' and '.join(parts), affected))
+                             u', '.join(parts), affected))
 
     def _status(self, text, error=False):
         tb = self._win.FindName('StatusText')
@@ -822,6 +830,7 @@ class KeynoteDialog(object):
         out.print_md(
             '- **{key_changes}** key change(s)\n'
             '- **{added}** new keynote(s)\n'
+            '- **{edits}** keynote text edit(s)\n'
             '- **{merges}** merge(s)\n'
             '- References to update: **{t}** tags, **{ty}** types, '
             '**{m}** materials\n'
@@ -829,6 +838,7 @@ class KeynoteDialog(object):
             'in this model'.format(
                 key_changes=report['key_changes'],
                 added=len(report['added']),
+                edits=len(report['text_edits']),
                 merges=report['merges'],
                 t=report['totals']['tag'],
                 ty=report['totals']['type'],
@@ -840,6 +850,15 @@ class KeynoteDialog(object):
             out.print_table(
                 table_data=[[k, (t or '')[:80]] for k, t in report['added']],
                 columns=['Key', 'Keynote text'])
+
+        if report['text_edits']:
+            out.print_md('## Edited keynote text')
+            out.print_md('These change the keynote file only — no model '
+                         'parameter holds keynote text.')
+            out.print_table(
+                table_data=[[k, (old or '')[:55], (new or '')[:55]]
+                            for k, old, new in report['text_edits']],
+                columns=['Key', 'Was', 'Now'])
 
         rows = [[r['old'], r['new'],
                  'merge' if r['merged'] else '',

@@ -167,6 +167,13 @@ def plan(model, refs_by_key, key_map):
         entry = model.entry_by_key(provisional)
         added.append((final, entry.text if entry is not None else u''))
 
+    # Text edits change the keynote file but touch no model parameter, so they
+    # are reported separately from key changes.
+    edits = [(key_map.get(e.key, e.key), e.origin[1], e.text)
+             for e in model.edited_entries()]
+    edits += [(c.key, c.source.origin[1], c.text)
+              for c in model.renamed_categories()]
+
     return {
         'rows':          rows,
         'totals':        totals,
@@ -174,6 +181,7 @@ def plan(model, refs_by_key, key_map):
         'unreferenced':  len(unreferenced),
         'merges':        len(model.merged),
         'added':         added,
+        'text_edits':    edits,
     }
 
 

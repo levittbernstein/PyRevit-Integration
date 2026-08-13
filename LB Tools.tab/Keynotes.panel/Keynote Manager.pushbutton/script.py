@@ -162,12 +162,16 @@ else:
                                          for k in state['key_map'])
 
                             n_added = len(state['model'].added)
-                            msg = ('About to renumber {} keynote key(s), add {} '
-                                   'new keynote(s), and update {} reference(s) '
-                                   'in this model.\n\n'
+                            n_edits = (len(state['model'].edited_entries())
+                                       + len(state['model'].renamed_categories()))
+                            msg = ('About to write the keynote file:\n\n'
+                                   '    {} key(s) renumbered\n'
+                                   '    {} new keynote(s)\n'
+                                   '    {} keynote text edit(s)\n'
+                                   '    {} model reference(s) updated\n\n'
                                    'The keynote file will be backed up to the '
                                    '{} folder first.'.format(
-                                       n_changes, n_added, n_refs,
+                                       n_changes, n_added, n_edits, n_refs,
                                        kfile.BACKUP_DIRNAME))
                             if pf.warnings:
                                 msg += '\n\n' + '\n\n'.join(pf.warnings)
@@ -193,6 +197,7 @@ else:
                                         '',
                                         'Keys changed:      {}'.format(n_changes),
                                         'Keynotes added:    {}'.format(n_added),
+                                        'Text edits:        {}'.format(n_edits),
                                         'Tags updated:      {}'.format(
                                             report['updated']['tag']),
                                         'Types updated:     {}'.format(
