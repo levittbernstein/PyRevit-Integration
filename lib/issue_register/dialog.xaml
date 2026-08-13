@@ -199,13 +199,34 @@
                     </CheckBox.Content>
                 </CheckBox>
             </Border>
-            <Border x:Name="SuitabilityPanel" Height="160"
+            <Border x:Name="SuitabilityPanel" Height="192"
                     BorderBrush="#CCCCCC" BorderThickness="1" Background="White"
                     Visibility="Collapsed">
-                <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Auto">
-                    <Grid x:Name="SuitabilityContainer" VerticalAlignment="Top"/>
-                </ScrollViewer>
+                <!-- Grid, not StackPanel: the button row must stay pinned while
+                     the grid below it scrolls. -->
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Orientation="Horizontal"
+                                Margin="6,5,6,5">
+                        <Button x:Name="ReadSuitabilityBtn"
+                                Style="{StaticResource SmallButton}"
+                                Content="Read from model" MinWidth="118"/>
+                        <TextBlock x:Name="SuitabilitySourceText"
+                                   FontSize="10" Foreground="#666666"
+                                   VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Auto">
+                        <Grid x:Name="SuitabilityContainer" VerticalAlignment="Top"/>
+                    </ScrollViewer>
+                </Grid>
             </Border>
         </StackPanel>
 

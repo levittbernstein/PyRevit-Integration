@@ -229,6 +229,10 @@ def get_sheets_data(doc):
     except Exception:
         pass
 
+    # Which parameter holds the suitability code varies by project template, so
+    # probe once rather than hardcoding a name.
+    suitability_param = _detect_suitability_param(sheets)
+
     result = []
     for sheet in sheets:
         if not sheet.CanBePrinted:
@@ -244,6 +248,8 @@ def get_sheets_data(doc):
         file_type            = _get_param(sheet, 'File Type')
         discipline           = _get_param(sheet, 'Discipline')
         sheet_type           = _get_param(sheet, 'Sheet Type')
+        suitability          = (_get_param(sheet, suitability_param)
+                                if suitability_param else '')
 
         # Sheet size — O(1) lookup into pre-built dict
         size = ''
@@ -357,6 +363,7 @@ def get_sheets_data(doc):
             'discipline':           discipline,
             'number':               sheet_number,
             'title':                sheet_name,
+            'suitability':          suitability,
             'size':                 size,
             'scale':                scale,
             'revisions':            sheet_revisions,
@@ -371,6 +378,88 @@ def get_sheets_data(doc):
 
     result.sort(key=_sort_key)
     return result
+
+
+# Candidate names for the sheet parameter holding the suitability code, most
+# specific first. Probed in order; the first one that exists on a sheet wins.
+SUITABILITY_PARAM_NAMES = (
+    'Suitability Code', 'Suitability', 'Document Status', 'Status Code',
+)
+
+
+def _detect_suitability_param(sheets):
+    """
+    Name of the suitability parameter present on these sheets, or None.
+
+    Tests for the parameter EXISTING rather than having a value, so a project
+    where the code has not been filled in yet is still detected correctly.
+    """
+    for sheet in sheets:
+        for name in SUITABILITY_PARAM_NAMES:
+            try:
+                if sheet.LookupParameter(name) is not None:
+                    return name
+            except Exception:
+                pass
+    return None
+
+
+def get_suitability_param_name(doc):
+    """
+    Name of the suitability parameter on this project's sheets, or None.
+
+    Public counterpart to _detect_suitability_param for callers that have a
+    document rather than sheet elements. Probes a handful of sheets only —
+    parameter presence is a property of the category, not the individual sheet,
+    so there is no need to scan them all.
+    """
+    from Autodesk.Revit.DB import FilteredElementCollector, ViewSheet  # noqa: PLC0415
+    try:
+        sheets = list(FilteredElementCollector(doc)
+                      .OfClass(ViewSheet)
+                      .ToElements())[:5]
+    except Exception:
+        return None
+    return _detect_suitability_param(sheets)
+
+
+def collect_suitability_by_package(sheets_data):
+    """
+    Current suitability code per drawing package, read from the model.
+
+    The sheet parameter is per sheet but the register records suitability per
+    package, so codes are aggregated. A package whose sheets disagree is
+    reported as a conflict and deliberately given NO code — picking one would
+    hide a package going out at mixed suitability, which is a real problem
+    worth seeing rather than papering over.
+
+    Note this is the CURRENT value on each sheet, which is only meaningful for
+    the issue being prepared now. Revit keeps no per-revision parameter history,
+    so past issues cannot be reconstructed from the model — they come from what
+    the register itself recorded at the time.
+
+    Returns (codes, conflicts):
+        codes     {package: code}                  packages in agreement
+        conflicts {package: {code: [sheet numbers]}} packages that disagree
+    """
+    by_package = OrderedDict()
+    for sheet in sheets_data:
+        pkg  = sheet.get('sheet_type') or 'UNCATEGORISED'
+        code = (sheet.get('suitability') or '').strip()
+        if not code:
+            continue
+        by_package.setdefault(pkg, OrderedDict()).setdefault(code, []).append(
+            sheet.get('number', ''))
+
+    codes     = {}
+    conflicts = {}
+    for pkg, found in by_package.items():
+        if len(found) == 1:
+            codes[pkg] = list(found.keys())[0]
+        else:
+            conflicts[pkg] = dict(found)
+
+    return codes, conflicts
 
 
 def collect_issue_dates(sheets_data):

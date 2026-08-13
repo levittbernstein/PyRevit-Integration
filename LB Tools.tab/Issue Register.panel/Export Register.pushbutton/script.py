@@ -23,7 +23,9 @@ _EXT_LIB  = os.path.join(_EXT_ROOT, 'lib', 'issue_register')
 if _EXT_LIB not in sys.path:
     sys.path.insert(0, _EXT_LIB)
 
-from revit_reader import get_sheets_data, get_project_info, collect_issue_dates
+from revit_reader import (get_sheets_data, get_project_info, collect_issue_dates,
+                          collect_suitability_by_package,
+                          get_suitability_param_name)
 from storage      import load_settings, save_settings, check_and_acquire_ownership
 from dialog       import ExportDialog
 
@@ -117,8 +119,16 @@ for _s in sheets_data:
             revision_index[_k] = set()
         revision_index[_k].add(_s['sheet_type'])
 
+# Current suitability per package, for the dialog's "Read from model" button.
+# Read here but never applied automatically — the user presses the button.
+_suit_codes, _suit_conflicts = collect_suitability_by_package(sheets_data)
+_suit_param = get_suitability_param_name(doc)
+
 dlg = ExportDialog(issue_keys, settings, all_packages=all_packages,
-                   project_info=project_info, revision_index=revision_index)
+                   project_info=project_info, revision_index=revision_index,
+                   suitability_codes=_suit_codes,
+                   suitability_conflicts=_suit_conflicts,
+                   suitability_param=_suit_param)
 confirmed, updated_settings = dlg.show()
 
 # ── Save settings — always, whether the user exported or just cancelled ───────

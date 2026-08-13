@@ -35,13 +35,19 @@ def _load_xaml(path):
 class ExportDialog(object):
 
     def __init__(self, issue_keys, settings, all_packages=None, project_info=None,
-                 revision_index=None):
+                 revision_index=None, suitability_codes=None,
+                 suitability_conflicts=None, suitability_param=None):
         self._issue_keys       = issue_keys
         self._settings         = settings
         self._all_packages     = all_packages or []
         self._project_info     = project_info or {}
         # {(date_str, issued_by): set of sheet_types} — used to gate Uncontrolled checkboxes
         self._revision_index   = revision_index or {}
+        # Current suitability read from the sheets, for the "Read from model"
+        # button. Never applied automatically — see _on_read_suitability.
+        self._suitability_codes     = suitability_codes or {}
+        self._suitability_conflicts = suitability_conflicts or {}
+        self._suitability_param     = suitability_param
         self._confirmed        = False
         self._name_boxes       = []
         self._code_boxes       = {}
@@ -325,6 +331,29 @@ class ExportDialog(object):
         self._suitability_cb    = self._win.FindName('SuitabilityEnabled')
         self._suitability_panel = self._win.FindName('SuitabilityPanel')
 
+        btn = self._win.FindName('ReadSuitabilityBtn')
+        if btn is not None:
+            btn.Click += self._on_read_suitability
+
+        # Say up front where the codes would come from, or why the button will
+        # not work, rather than only finding out on click.
+        label = self._win.FindName('SuitabilitySourceText')
+        if label is not None:
+            if not self._suitability_param:
+                from revit_reader import SUITABILITY_PARAM_NAMES  # noqa: PLC0415
+                label.Text = ('  No suitability parameter found on sheets '
+                              '(looked for: {}).'.format(
+                                  ', '.join(SUITABILITY_PARAM_NAMES)))
+                if btn is not None:
+                    btn.IsEnabled = False
+            elif self._issue_keys:
+                label.Text = ('  Fills the {} column from the "{}" sheet '
+                              'parameter.'.format(
+                                  self._fmt_date(self._issue_keys[-1][0]),
+                                  self._suitability_param))
+            else:
+                label.Text = '  No issues to fill.'
+
         if self._suitability_cb is not None:
             enabled = self._settings.get('suitability_enabled', False)
             self._suitability_cb.IsChecked = enabled
@@ -333,6 +362,86 @@ class ExportDialog(object):
 
         self._build_suitability_grid()
         self._update_suitability_visibility()
+
+    def _on_read_suitability(self, sender, e):
+        """
+        Fill the latest issue's suitability column from the model.
+
+        Only the latest issue is touched. Revit holds no per-revision parameter
+        history, so today's sheet values say nothing about what a package was
+        issued at three months ago — writing them into historic columns would
+        be fabricating a record.
+        """
+        from pyrevit import forms  # noqa: PLC0415
+
+        if not self._issue_keys:
+            return
+
+        col_idx = len(self._issue_keys) - 1   # issue_keys is date-sorted
+        date_str = self._fmt_date(self._issue_keys[col_idx][0])
+
+        filled, unchanged, no_cell, added_opts = [], [], [], []
+
+        for pkg_idx, pkg in enumerate(self._all_packages):
+            code = self._suitability_codes.get(pkg)
+            if not code:
+                continue
+            cb = self._suit_boxes.get((pkg_idx, col_idx))
+            if cb is None:
+                # Package was not issued on this date, so it has no cell.
+                no_cell.append(pkg)
+                continue
+
+            current = str(cb.SelectedItem) if cb.SelectedItem is not None else ''
+            if current == code:
+                unchanged.append(pkg)
+                continue
+
+            # A code the model uses but our dropdown does not offer would
+            # silently fail to select, so widen the list rather than lose it.
+            if code not in [str(i) for i in cb.Items]:
+                cb.Items.Add(code)
+                added_opts.append(code)
+
+            cb.SelectedItem = code
+            filled.append('{} -> {}'.format(pkg, code))
+
+        lines = ['Read the "{}" parameter into the {} column.'.format(
+            self._suitability_param, date_str), '']
+        lines.append('{} package(s) set{}'.format(
+            len(filled), ':' if filled else '.'))
+        for item in filled[:20]:
+            lines.append('    ' + item)
+        if unchanged:
+            lines.append('')
+            lines.append('{} already correct.'.format(len(unchanged)))
+
+        if self._suitability_conflicts:
+            lines.append('')
+            lines.append('LEFT BLANK — sheets in these packages disagree:')
+            for pkg, groups in sorted(self._suitability_conflicts.items()):
+                detail = '; '.join(
+                    '{} on {}'.format(code, ', '.join(nums[:4]) +
+                                      ('...' if len(nums) > 4 else ''))
+                    for code, nums in groups.items())
+                lines.append('    {}: {}'.format(pkg, detail))
+            lines.append('')
+            lines.append('Fix the sheet parameters and press Read from model '
+                         'again, or set these by hand.')
+
+        if added_opts:
+            lines.append('')
+            lines.append('Codes not in the standard list were added so they '
+                         'could be used: {}'.format(
+                             ', '.join(sorted(set(added_opts)))))
+
+        if no_cell:
+            lines.append('')
+            lines.append('{} package(s) have a code but were not issued on '
+                         'this date, so have no cell to fill.'.format(
+                             len(no_cell)))
+
+        forms.alert('\n'.join(lines), title='Suitability read from model')
 
     def _on_suitability_toggle(self, sender, e):
         self._update_suitability_visibility()
