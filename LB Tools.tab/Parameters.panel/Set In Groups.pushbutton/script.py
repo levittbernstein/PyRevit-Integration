@@ -149,6 +149,16 @@ else:
                         'Written:  {}'.format(report['written']),
                         'Failed:   {}'.format(len(report['failed'])),
                     ]
+                    if report['skipped']:
+                        out += [
+                            'Skipped:  {} (blocked inside multi-instance '
+                            'groups)'.format(report['skipped']),
+                            '',
+                            'Run Preview for the group-type worksheet — those {} '
+                            'element(s) span only {} group type(s), so editing '
+                            'one instance of each is enough.'.format(
+                                report['skipped'], len(plan.blocked_by_type)),
+                        ]
                     if report['vary_enabled']:
                         out += [
                             '',

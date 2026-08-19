@@ -58,6 +58,7 @@ class GroupParamDialog(object):
         self._survey   = None
         self._plan     = None
         self._boxes    = {}   # row key -> TextBox
+        self._write_probe = None   # (ok, reason) from a rolled-back real write
 
         self._win = _load_xaml(
             os.path.join(os.path.dirname(__file__), 'dialog.xaml'))
@@ -197,10 +198,40 @@ class GroupParamDialog(object):
         self._rows = gapply.build_rows(self._elements, group_by, target)
         self._binding = probe.find_binding(self._doc, target)
         probe.probe_vary_capability(self._doc, self._binding)
+        self._probe_grouped_write()
 
         self._build_grid()
         self._show_diagnosis()
         self._recount()
+
+    def _probe_grouped_write(self):
+        """
+        Attempt one real write inside a multi-instance group and roll it back.
+
+        Only relevant when vary-by-group cannot be enabled — otherwise the write
+        route is already known to work. Asking Revit beats predicting from
+        instance counts, because Revit's behaviour on group members has edge
+        cases and is not fully documented.
+        """
+        self._write_probe = None
+
+        if self._binding is None or self._binding.varies or self._binding.can_enable:
+            return
+
+        sample = None
+        for el in self._elements:
+            if self._survey.instance_count_for(el) > 1:
+                sample = el
+                break
+        if sample is None:
+            return
+
+        target = self._target()
+        # Must differ from the current value or the write is a no-op that Revit
+        # would accept even where a genuine change is refused.
+        test_value = probe.distinct_test_value(probe.read_value(sample, target))
+        self._write_probe = probe.probe_write(
+            self._doc, sample, target, test_value)
 
     def _clear_rows(self):
         if self._container is None:
@@ -356,9 +387,20 @@ class GroupParamDialog(object):
                            'verified against this model. Enabling it is what '
                            'removes the "Edit Group mode" restriction.')
                 t2.Foreground = Brushes.SeaGreen
+            elif self._write_probe and self._write_probe[0]:
+                t2.Text = ('Vary by group instance cannot be enabled, BUT a '
+                           'real test write inside a multi-instance group '
+                           'succeeded (and was rolled back). These will be '
+                           'written; values propagate to every instance of '
+                           'each group type.')
+                t2.Foreground = Brushes.SeaGreen
             else:
                 t2.Text = ('Vary by group instance CANNOT be enabled. {}'
                            .format(b.reason))
+                if self._write_probe:
+                    t2.Text += (' A real test write inside a group was also '
+                                'attempted and Revit refused it: {}'
+                                .format(self._write_probe[1]))
                 t2.Foreground = Brushes.Firebrick
 
         t3 = self._win.FindName('DiagGroupText')
@@ -378,8 +420,10 @@ class GroupParamDialog(object):
     def _recount(self):
         if not self._rows or self._binding is None:
             return
+        probe_ok = bool(self._write_probe and self._write_probe[0])
         self._plan = gapply.plan(self._doc, self._rows, self._target(),
-                                 self._binding, self._survey)
+                                 self._binding, self._survey,
+                                 grouped_write_ok=probe_ok)
         p = self._plan
 
         if not p.to_write:
@@ -388,10 +432,13 @@ class GroupParamDialog(object):
             return
 
         msg = '{} element(s) would be written, {} already correct.'.format(
-            len(p.to_write), p.unchanged)
+            len(p.to_write) - len(p.blocked), p.unchanged)
         if p.blocked:
-            msg += (' {} CANNOT be written — see Preview for why.'
-                    .format(len(p.blocked)))
+            msg += (' {} cannot be written from outside a group — but they span '
+                    'only {} group type(s), so Preview gives you a worksheet of '
+                    '{} Edit Group visits instead.'.format(
+                        len(p.blocked), len(p.blocked_by_type),
+                        len(p.blocked_by_type)))
         self._status(msg, error=bool(p.blocked))
 
     def _status(self, text, error=False):
@@ -456,11 +503,17 @@ class GroupParamDialog(object):
                 out.print_md('- {}'.format(w))
 
         if p.blocked:
-            out.print_md('## Blocked — these cannot be written')
-            out.print_md('Revit refuses parameter writes on members of a group '
-                         'type that has more than one instance when the '
-                         'parameter cannot vary by group instance. There is no '
-                         'API route around this.')
+            out.print_md('## Blocked — these cannot be written from outside a group')
+            out.print_md(
+                'Revit refuses parameter writes on members of a group type that '
+                'has more than one instance when the parameter cannot vary by '
+                'group instance. This was verified against this model by '
+                'attempting a real write and rolling it back. The Revit API has '
+                'no Edit Group mode, so no add-in can do this.')
+
+            self._print_worksheet(out, p)
+
+            out.print_md('### Every blocked element')
             brows = [[str(probe.eid_int(el.Id)), key, reason]
                      for el, key, reason in p.blocked[:200]]
             out.print_table(table_data=brows,
@@ -468,6 +521,66 @@ class GroupParamDialog(object):
             if len(p.blocked) > 200:
                 out.print_md('_{} further blocked element(s) not listed._'
                              .format(len(p.blocked) - 200))
+
+            self._print_data_types(out)
+
+    def _print_worksheet(self, out, p):
+        """
+        Per-group-type instructions for the manual Edit Group pass.
+
+        Bucketed by group TYPE rather than listed per element, because the value
+        propagates within a group type: one visit per type clears every instance
+        of it. That is the difference between hundreds of edits and a handful.
+        """
+        if not p.blocked_by_type:
+            return
+
+        out.print_md('### Worksheet — {} group type(s) to visit'.format(
+            len(p.blocked_by_type)))
+        out.print_md(
+            'Edit **one** instance of each group type below and set the values '
+            'shown; Revit propagates them to every other instance of that same '
+            'type automatically. That is {} Edit Group visits rather than {} '
+            'individual element edits.'.format(
+                len(p.blocked_by_type), len(p.blocked)))
+
+        rows = []
+        for gt_name in sorted(p.blocked_by_type):
+            pairs = p.blocked_by_type[gt_name]
+            for key in sorted(pairs):
+                rows.append([gt_name, key or '(blank)', pairs[key]])
+        out.print_table(
+            table_data=rows,
+            columns=['Group type — edit one instance', self._group_by(),
+                     'Set {} to'.format(self._target())])
+
+    def _print_data_types(self, out):
+        """
+        Which data types in THIS model accept vary-by-group.
+
+        Autodesk publishes no list, so this probes every existing project
+        parameter binding in one rolled-back transaction. It answers the only
+        question that matters if a replacement parameter is on the table: what
+        type would it have to be?
+        """
+        try:
+            allowed, blocked = probe.probe_data_types(self._doc)
+        except Exception:
+            return
+
+        out.print_md('## Which data types allow vary-by-group in this model')
+        out.print_md(
+            'Probed empirically against every project parameter in this model, '
+            'because Autodesk does not publish the list. A replacement '
+            'parameter would need one of the allowed types.')
+
+        rows = []
+        for dtype in sorted(allowed):
+            rows.append(['ALLOWED', dtype, ', '.join(sorted(allowed[dtype]))[:90]])
+        for dtype in sorted(blocked):
+            rows.append(['blocked', dtype, ', '.join(sorted(blocked[dtype]))[:90]])
+        out.print_table(table_data=rows,
+                        columns=['', 'Data type', 'Example parameters'])
 
     # ── Apply / Close ─────────────────────────────────────────────────────────
 

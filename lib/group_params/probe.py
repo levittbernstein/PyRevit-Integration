@@ -250,8 +250,11 @@ def probe_write(doc, element, param_name, value):
     """
     Try writing *value* and roll it back. Returns (ok, reason).
 
-    Used to establish up front whether the run can succeed at all, rather than
-    discovering it partway through and leaving a half-applied model.
+    Establishes whether a write is genuinely possible instead of inferring it
+    from a rule about group instance counts.  Rules about what Revit permits on
+    group members are undocumented and have edge cases — Revit sometimes creates
+    a new group rather than raising — so the only trustworthy answer is to ask
+    Revit and undo the answer.
     """
     from Autodesk.Revit.DB import Transaction
 
@@ -268,6 +271,94 @@ def probe_write(doc, element, param_name, value):
                 t.RollBack()
         except Exception:
             pass
+
+
+def distinct_test_value(current, storage_hint=u''):
+    """
+    A value guaranteed to differ from *current*, for probing a real write.
+
+    Probing with the value already held would be a no-op that Revit accepts even
+    where a genuine change would be refused, which would report success falsely.
+    """
+    cur = (current or u'').strip()
+    try:
+        return u'{}'.format(int(round(float(cur))) + 1)
+    except (ValueError, TypeError):
+        pass
+    return u'0' if cur == u'1' else u'1'
+
+
+def probe_data_types(doc):
+    """
+    Which of the model's existing project parameters can vary by group, by type.
+
+    Answers "what data type would a replacement parameter need to be?" from the
+    live model rather than from documentation Autodesk does not publish.  Every
+    binding is attempted in ONE transaction which is then rolled back, so this
+    is both fast and non-destructive.
+
+    Returns (allowed, blocked) — each a dict of data type name -> [param names].
+    """
+    from Autodesk.Revit.DB import Transaction
+
+    try:
+        InstanceBinding = _dbtype('InstanceBinding')
+    except Exception:
+        InstanceBinding = None
+
+    entries = []
+    try:
+        it = doc.ParameterBindings.ForwardIterator()
+        it.Reset()
+        while it.MoveNext():
+            definition = it.Key
+            if definition is None:
+                continue
+            is_instance = True
+            if InstanceBinding is not None:
+                is_instance = isinstance(it.Current, InstanceBinding)
+            entries.append((definition, is_instance))
+    except Exception:
+        pass
+
+    allowed = {}
+    blocked = {}
+
+    t = Transaction(doc, 'LB - probe vary-by-group data types (rolled back)')
+    try:
+        t.Start()
+        for definition, is_instance in entries:
+            name = definition.Name
+            dtype = _data_type_name(definition) or u'unknown'
+
+            if not is_instance:
+                blocked.setdefault(dtype + ' (type-bound)', []).append(name)
+                continue
+
+            try:
+                already = definition.GetAllowVaryBetweenGroups(doc)
+            except Exception:
+                already = False
+
+            if already:
+                allowed.setdefault(dtype, []).append(name)
+                continue
+
+            try:
+                definition.SetAllowVaryBetweenGroups(doc, True)
+                allowed.setdefault(dtype, []).append(name)
+            except Exception:
+                blocked.setdefault(dtype, []).append(name)
+    except Exception:
+        pass
+    finally:
+        try:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+        except Exception:
+            pass
+
+    return allowed, blocked
 
 
 def _short(exc):

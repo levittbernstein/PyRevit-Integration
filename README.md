@@ -312,10 +312,16 @@ enter each group in turn and set the value there.
 | Its **data type** is on Revit's excluded list | No — **Length** and **Yes/No** are excluded *by design* |
 
 Autodesk publishes no exhaustive list of permitted data types, and their own
-project-parameter help page doesn't enumerate it. Text, Integer, Number, Area,
-Volume, Currency, URL and Material are commonly allowed. Restrictions cluster in
-the **Common** discipline; Structural/HVAC/Electrical equivalents are usually
-unrestricted.
+project-parameter help page doesn't enumerate it. **Integer (`spec.int64`) is
+also refused** — confirmed against a live LB model, so don't assume numeric
+types are safe. Text is reliably allowed; Area, Volume, Currency, URL and
+Material are commonly allowed. Restrictions cluster in the **Common**
+discipline; Structural/HVAC/Electrical equivalents are usually unrestricted.
+
+Because the list is undocumented and version-dependent, the tool's Preview
+**probes every project parameter in the open model** and reports which data
+types actually accept the setting. Trust that output over any list, including
+this one.
 
 `InternalDefinition.SetAllowVaryBetweenGroups()` **enforces the same whitelist
 as the UI** and throws `ArgumentException` for an unsupported type — it is not a
@@ -333,8 +339,17 @@ guessing from parameter metadata:
    there is nothing to propagate the change to.
 
 Anything left over — a member of a multi-instance group type whose parameter
-cannot vary — is genuinely impossible and is reported as blocked with the
-reason, rather than failing partway through.
+cannot vary — is genuinely impossible from outside Edit Group mode. Rather than
+predicting that from instance counts, the tool **attempts one real write and
+rolls it back**, so the verdict comes from Revit rather than from a rule.
+
+For those, Preview produces a **per-group-type worksheet**. Because the value
+propagates within a group type, editing one instance of each type sets it for
+every other instance — so hundreds of blocked elements usually collapse to a
+handful of Edit Group visits. That is the closest thing to automation available:
+the API cannot enter Edit Group mode, and ungroup/regroup is not a substitute
+because regrouping creates a *new* group type rather than redefining the
+existing one, which would turn one shared type into many unique ones.
 
 ### Safety measures
 

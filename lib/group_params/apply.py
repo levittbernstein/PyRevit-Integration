@@ -86,11 +86,16 @@ class Plan(object):
         self.single_inst    = 0     # grouped, but group type has one instance
         self.multi_inst     = 0     # grouped, group type has several instances
         self.needs_vary     = False
-        self.blocked        = []    # (element, row_key, reason) predicted failures
+        self.blocked        = []    # (element, row_key, reason)
         self.warnings       = []
+        # Blocked work bucketed by group type, because the value propagates
+        # within a group type: one Edit Group visit per TYPE clears every
+        # instance of it. This turns "565 rooms" into "however many group types",
+        # which is the number that actually reflects the work involved.
+        self.blocked_by_type = {}   # group type name -> {row_key: value}
 
 
-def plan(doc, rows, target, binding, survey):
+def plan(doc, rows, target, binding, survey, grouped_write_ok=None):
     """
     Work out what would be written and what cannot be.
 
@@ -129,16 +134,28 @@ def plan(doc, rows, target, binding, survey):
                 'Enabling "Values can vary by group instance" on "{}" is needed '
                 'to write inside groups. This is a project-wide setting change '
                 'and is what removes the Edit Group restriction.'.format(target))
+
+        elif grouped_write_ok:
+            # A real write was attempted and Revit allowed it, so the rule below
+            # would have been wrong. Trust the probe over the rule.
+            p.warnings.append(
+                'Vary-by-group cannot be enabled, but a test write inside a '
+                'multi-instance group SUCCEEDED, so these will be attempted. '
+                'Values will propagate to every instance of each group type.')
+
         else:
             # Only single-instance group types can still be written.
-            for el, _value, key in p.to_write:
+            for el, value, key in p.to_write:
                 if survey.is_grouped(el) and survey.instance_count_for(el) > 1:
+                    gt_name = survey.type_name.get(
+                        survey.group_type_of(el), '?')
                     p.blocked.append((
                         el, key,
                         'in group "{}" which has {} instances, and the '
                         'parameter cannot vary by group instance'.format(
-                            survey.type_name.get(survey.group_type_of(el), '?'),
-                            survey.instance_count_for(el))))
+                            gt_name, survey.instance_count_for(el))))
+                    p.blocked_by_type.setdefault(gt_name, {})[key] = value
+
             if p.single_inst:
                 p.warnings.append(
                     '{} element(s) are in single-instance groups and can still '
@@ -147,6 +164,12 @@ def plan(doc, rows, target, binding, survey):
             if binding.reason:
                 p.warnings.append(
                     'Cannot enable vary-by-group: {}'.format(binding.reason))
+            if p.blocked_by_type:
+                p.warnings.append(
+                    'The {} blocked element(s) span only {} group type(s). '
+                    'Because the value propagates within a group type, editing '
+                    'ONE instance of each type is enough — see the worksheet in '
+                    'Preview.'.format(len(p.blocked), len(p.blocked_by_type)))
 
     return p
 
@@ -166,6 +189,7 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
     report = {
         'written':        0,
         'failed':         [],     # (element_id, row_key, reason)
+        'skipped':        0,      # known-blocked, not attempted
         'vary_enabled':   False,
         'vary_restored':  False,
         'aligned_ids':    0,
@@ -193,7 +217,15 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
                     'Could not enable vary-by-group on "{}": {}'.format(
                         target, probe._short(exc)))
 
+        # Already known to be refused, verified by probe. Attempting them anyway
+        # would bury the real failures under a hundred identical ones.
+        blocked_ids = set(probe.eid_int(el.Id) for el, _k, _r in plan_obj.blocked)
+
         for el, value, key in plan_obj.to_write:
+            if probe.eid_int(el.Id) in blocked_ids:
+                report['skipped'] += 1
+                continue
+
             ok, reason = probe.set_value(el, target, value)
             if ok:
                 report['written'] += 1
