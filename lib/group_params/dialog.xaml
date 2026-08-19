@@ -209,6 +209,12 @@
       <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
         <Button x:Name="PreviewBtn" Style="{StaticResource CancelButton}"
                 Content="Preview"/>
+        <Button x:Name="RebuildTestBtn" Style="{StaticResource CancelButton}"
+                Content="Rebuild: dry run" MinWidth="140"
+                ToolTip="Ungroup one instance, change the values, regroup and swap the other instances onto the new type — then roll it all back and report exactly what it would have done. Changes nothing."/>
+        <Button x:Name="RebuildBtn" Style="{StaticResource ActionButton}"
+                Content="Rebuild groups" MinWidth="140"
+                ToolTip="The same, committed for real. Only available once a dry run has come back clean."/>
         <Button x:Name="ApplyBtn" Style="{StaticResource ActionButton}"
                 Content="Apply"/>
         <Button x:Name="CloseBtn" Style="{StaticResource CancelButton}"

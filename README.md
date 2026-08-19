@@ -343,13 +343,58 @@ cannot vary — is genuinely impossible from outside Edit Group mode. Rather tha
 predicting that from instance counts, the tool **attempts one real write and
 rolls it back**, so the verdict comes from Revit rather than from a rule.
 
-For those, Preview produces a **per-group-type worksheet**. Because the value
-propagates within a group type, editing one instance of each type sets it for
-every other instance — so hundreds of blocked elements usually collapse to a
-handful of Edit Group visits. That is the closest thing to automation available:
-the API cannot enter Edit Group mode, and ungroup/regroup is not a substitute
-because regrouping creates a *new* group type rather than redefining the
-existing one, which would turn one shared type into many unique ones.
+For those there are two routes.
+
+**Manual, safe:** Preview produces a **per-group-type worksheet**. Because the
+value propagates within a group type, editing one instance of each type sets it
+for every other instance, so hundreds of blocked elements usually collapse to a
+handful of Edit Group visits.
+
+**Automated — Rebuild group types:** the workaround Autodesk's own API forum
+describes. Ungroup one instance, set the values on the loose members, regroup,
+then swap every other instance onto the new type with `Element.ChangeTypeId`.
+Swapping is what keeps them sharing one definition instead of becoming unique
+groups. The old type is deleted and its name reclaimed, so the model reads as
+before.
+
+### Preserving per-instance data during a rebuild
+
+Swapping an instance onto a new type replaces its members, which would discard
+any parameter that legitimately **varies** between group instances — room
+numbers being the obvious casualty. Every varying value is therefore
+snapshotted per instance beforehand and written back afterwards.
+
+There is a symmetry that makes this tractable: the parameters that *need*
+restoring are exactly the parameters that *can* be restored. A non-varying
+parameter is identical across instances by definition, so the new definition
+already carries it; a varying parameter holds real per-instance data, and is
+also the only kind Revit permits writing on a group member.
+
+Members are recreated, so ElementIds change. Old and new are matched on
+**(category, rounded location point)** — the group instance doesn't move, which
+makes position a stable key — with the index within the group as a fallback for
+members that have no location. If matching is incomplete the run is rolled back
+rather than restoring values onto the wrong elements.
+
+### Rebuild safety
+
+- The whole rebuild runs in **one transaction** and is rolled back unless
+  verification is clean.
+- **Rebuild: dry run** performs the entire operation for real and then always
+  rolls it back, reporting exactly what it would have done. The real rebuild
+  stays locked until a dry run comes back clean.
+- Warnings are suppressed during the rebuild so ungroup/regroup dialogs don't
+  stall it; genuine **errors** are left to fail the transaction and trigger the
+  rollback.
+- Any per-instance value that could not be written back is treated as a blocker,
+  not a nuisance — that data would be lost.
+
+### What is not possible
+
+`PostableCommand` has no Edit Group entry, and pyRevit deliberately **disables
+its buttons while Revit is in Edit Group mode** because the API has no support
+for that context. So a "run this while I'm inside the group" hybrid cannot work.
+Autodesk have logged the gap as REVIT-99372.
 
 ### Safety measures
 

@@ -59,6 +59,10 @@ class GroupParamDialog(object):
         self._plan     = None
         self._boxes    = {}   # row key -> TextBox
         self._write_probe = None   # (ok, reason) from a rolled-back real write
+        # The real rebuild stays locked until a dry run has come back clean —
+        # it rewrites group definitions, so it should never be the first thing
+        # a user manages to press.
+        self._dry_run_clean = False
 
         self._win = _load_xaml(
             os.path.join(os.path.dirname(__file__), 'dialog.xaml'))
@@ -95,9 +99,11 @@ class GroupParamDialog(object):
         hook('AnalyseBtn',    self._on_analyse)
         hook('FillBlanksBtn', self._on_fill_blanks)
         hook('ClearAllBtn',   self._on_clear_all)
-        hook('PreviewBtn',    self._on_preview)
-        hook('ApplyBtn',      self._on_apply)
-        hook('CloseBtn',      self._on_close)
+        hook('PreviewBtn',     self._on_preview)
+        hook('RebuildTestBtn', self._on_rebuild_dry)
+        hook('RebuildBtn',     self._on_rebuild_real)
+        hook('ApplyBtn',       self._on_apply)
+        hook('CloseBtn',       self._on_close)
         hook('GroupByCombo',  self._on_param_changed, 'SelectionChanged')
         hook('TargetCombo',   self._on_param_changed, 'SelectionChanged')
 
@@ -581,6 +587,126 @@ class GroupParamDialog(object):
             rows.append(['blocked', dtype, ', '.join(sorted(blocked[dtype]))[:90]])
         out.print_table(table_data=rows,
                         columns=['', 'Data type', 'Example parameters'])
+
+    # ── Rebuild group types ───────────────────────────────────────────────────
+
+    def _on_rebuild_dry(self, sender, e):
+        self._run_rebuild(dry_run=True)
+
+    def _on_rebuild_real(self, sender, e):
+        if not self._dry_run_clean:
+            self._status('Run "Rebuild: dry run" first and check it comes back '
+                         'clean — this rewrites group definitions.', error=True)
+            return
+        self._run_rebuild(dry_run=False)
+
+    def _run_rebuild(self, dry_run):
+        from group_params import regroup
+
+        self._flush_values()
+        self._recount()
+        p = self._plan
+
+        if p is None or not p.blocked_by_type:
+            self._status('Nothing needs rebuilding — either there is nothing '
+                         'blocked, or the values can be written directly with '
+                         'Apply.', error=True)
+            return
+
+        # Which group type ids are blocked, and the values each one needs.
+        by_type_id = {}
+        for el, key, _reason in p.blocked:
+            gt_id = self._survey.group_type_of(el)
+            if gt_id is None:
+                continue
+            row_value = None
+            for row in self._rows:
+                if row.key == key:
+                    row_value = row.value
+                    break
+            if row_value:
+                by_type_id.setdefault(gt_id, {})[key] = row_value
+
+        from Autodesk.Revit.DB import ElementId
+        reports = []
+        for gt_id, values in by_type_id.items():
+            reports.append(regroup.rebuild_group_type(
+                self._doc, ElementId(gt_id), values,
+                self._target(), self._group_by(), dry_run=dry_run))
+
+        self._report_rebuild(reports, dry_run)
+
+    def _report_rebuild(self, reports, dry_run):
+        from pyrevit import script
+        out = script.get_output()
+
+        clean = all(r.ok for r in reports) and bool(reports)
+        self._dry_run_clean = clean if dry_run else False
+
+        out.print_md('# Rebuild group types — {}'.format(
+            'DRY RUN (everything rolled back)' if dry_run else 'APPLIED'))
+
+        if dry_run:
+            out.print_md('**Nothing was changed.** Each group type was rebuilt '
+                         'for real and then rolled back, so this is exactly '
+                         'what would happen.')
+
+        rows = []
+        for r in reports:
+            rows.append([
+                r.group_type, str(r.instances), str(r.written),
+                str(r.restored), str(r.unmatched),
+                'CLEAN' if r.ok else 'PROBLEM',
+                'rolled back' if r.rolled_back else 'committed',
+            ])
+        out.print_table(
+            table_data=rows,
+            columns=['Group type', 'Instances', 'Values set',
+                     'Per-instance values restored', 'Unmatched members',
+                     'Verdict', 'Outcome'])
+
+        problems = [(r.group_type, msg) for r in reports for msg in r.problems]
+        if problems:
+            out.print_md('## Problems — these caused a rollback')
+            for gt, msg in problems:
+                out.print_md('- **{}**: {}'.format(gt, msg))
+
+        failed = [(r.group_type, n, why)
+                  for r in reports for n, why in r.restore_failed]
+        if failed:
+            out.print_md('## Per-instance values that could not be restored')
+            out.print_md('These held data that varies between group instances '
+                         'and Revit refused to write them back. Treat this as a '
+                         'blocker — the data would be lost.')
+            out.print_table(
+                table_data=[[gt, n, why] for gt, n, why in failed[:100]],
+                columns=['Group type', 'Parameter', 'Reason'])
+
+        unmatched = sum(r.unmatched for r in reports)
+        if unmatched:
+            out.print_md('## Unmatched members')
+            out.print_md(
+                '{} member(s) could not be matched to their pre-rebuild '
+                'counterpart, so their per-instance values could not be '
+                'restored. This is why the run was rolled back — restoring '
+                'onto the wrong element would be worse than not restoring at '
+                'all.'.format(unmatched))
+
+        if dry_run:
+            if clean:
+                self._status('Dry run CLEAN across {} group type(s) — nothing '
+                             'was changed. "Rebuild groups" is now enabled. '
+                             'Save the model first.'.format(len(reports)))
+            else:
+                self._status('Dry run found problems — see the output window. '
+                             'Nothing was changed, and Rebuild stays disabled.',
+                             error=True)
+        else:
+            committed = sum(1 for r in reports if r.committed)
+            self._status('Rebuilt {} of {} group type(s). {}'.format(
+                committed, len(reports),
+                'Check the output window.' if committed < len(reports) else ''),
+                error=committed < len(reports))
 
     # ── Apply / Close ─────────────────────────────────────────────────────────
 
