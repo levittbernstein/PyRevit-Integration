@@ -10,6 +10,7 @@ A growing suite of Revit automation tools for Levitt Bernstein, delivered as a s
 |---|---|---|
 | Export Register | Issue Register | Exports a formatted Deliverables List & Issue Sheet (Excel + PDF) |
 | Keynote Manager | Keynotes | Renumber, reorder and categorise keynotes, then sync to the keynote file and all model references |
+| Set In Groups | Parameters | Set a parameter across many elements bucketed by another parameter, including elements inside model groups |
 
 ---
 
@@ -86,6 +87,10 @@ LB-IssueRegister.extension/        ← pyRevit extension root (must end in .exte
 └── lib/
     ├── lb_shared/                  ← shared utilities used by all tools
     │   └── extensible_storage.py   ← Revit Extensible Storage manager
+    ├── group_params/               ← all code for the Set In Groups tool
+    │   ├── probe.py                ← model survey + rolled-back capability probes
+    │   ├── apply.py                ← strategy selection and the write
+    │   └── dialog.py + dialog.xaml ← WPF mapping window
     ├── keynote_manager/            ← all code for the Keynote Manager tool
     │   ├── keynote_file.py         ← .txt parse/write, encoding preservation
     │   ├── keynote_reader.py       ← KeynoteTable path + reference snapshot
@@ -282,6 +287,79 @@ file writes, each a chance to half-fail and desync.
 
 ---
 
+## Set In Groups — detail
+
+### The problem it solves
+
+Editing a non-itemised schedule row fails as soon as any of its elements are
+inside a model group. Revit answers:
+
+> Changes to groups are allowed only in group edit mode.
+
+This applies to the **API** exactly as it does to schedule cells and the
+Properties palette, and the Revit API has **no Edit Group mode**. So the
+restriction cannot be side-stepped directly — the usual manual workaround is to
+enter each group in turn and set the value there.
+
+### Why the greyed-out checkbox happens
+
+"Values can vary by group instance" is unavailable when any of these hold:
+
+| Cause | Fixable? |
+|---|---|
+| It's a built-in Revit parameter | No — the setting only exists for project/shared parameters |
+| Bound as a **type** parameter | Only by rebinding as instance; a type is shared by definition |
+| Its **data type** is on Revit's excluded list | No — **Length** and **Yes/No** are excluded *by design* |
+
+Autodesk publishes no exhaustive list of permitted data types, and their own
+project-parameter help page doesn't enumerate it. Text, Integer, Number, Area,
+Volume, Currency, URL and Material are commonly allowed. Restrictions cluster in
+the **Common** discipline; Structural/HVAC/Electrical equivalents are usually
+unrestricted.
+
+`InternalDefinition.SetAllowVaryBetweenGroups()` **enforces the same whitelist
+as the UI** and throws `ArgumentException` for an unsupported type — it is not a
+back door.
+
+### How the tool gets through
+
+Two routes, and it probes the live model to find out which apply rather than
+guessing from parameter metadata:
+
+1. **Enable vary-by-group.** The value then belongs to the element rather than
+   the group definition, so writing it is no longer a change to the group. This
+   is the main route and works for most parameters.
+2. **Single-instance group types.** Revit permits the write regardless, because
+   there is nothing to propagate the change to.
+
+Anything left over — a member of a multi-instance group type whose parameter
+cannot vary — is genuinely impossible and is reported as blocked with the
+reason, rather than failing partway through.
+
+### Safety measures
+
+- Every capability question is answered by attempting the operation inside a
+  transaction that is **always rolled back**, so pressing *Analyse* never
+  changes the model. Revit's rules here are undocumented and version-dependent;
+  probing is exact where inference is not.
+- The whole write runs in **one transaction**, so a mid-run failure cannot leave
+  a half-applied model.
+- Blank rows are left untouched, and rows already holding the target value are
+  skipped rather than rewritten.
+- Enabling vary-by-group is a **project-wide** setting change, so it is stated
+  explicitly in the confirmation prompt and in the result.
+
+### Known limits
+
+- Switching vary-by-group back off makes Revit **align values across group
+  instances**, which can overwrite values other elements legitimately held per
+  instance. That option therefore defaults to off, and leaving the setting on
+  means future manual edits no longer propagate between group instances.
+- Rooms whose corresponding members differ between group instances are the case
+  where alignment is most likely to lose data.
+
+---
+
 ## Developer notes — IronPython gotchas
 
 pyRevit runs `script.py` and any modules it imports under IronPython. This
@@ -392,6 +470,27 @@ keynote .txt orphans every tag holding the old key, silently, and
 the keynote table — `KeynoteTable` exposes only `GetKeyBasedTreeEntries()`,
 `LoadFrom()` and `Reload()`, and `Reload()` throws
 `ModificationOutsideTransactionException` outside a transaction.
+
+---
+
+### ⚠️ The Revit API cannot edit group members either
+
+Worth knowing before designing anything that writes to grouped elements: the API
+is subject to the same restriction as the UI and throws
+
+> Changes to groups are allowed only in group edit mode.
+
+There is **no Edit Group mode in the API**. Writes to a group member only
+succeed when the parameter has "Values can vary by group instance" enabled, or
+when the member's group type has exactly one instance. See the Set In Groups
+section above for the full rules and for why the vary-by-group checkbox is
+sometimes greyed out.
+
+Corollary for probing capability: don't infer it from parameter metadata. Attempt
+the operation inside a transaction and roll it back — `group_params/probe.py`
+does this throughout, because Revit's rules are undocumented, version-dependent,
+and `SetAllowVaryBetweenGroups()` refuses unsupported data types with an
+exception that is the only reliable answer available.
 
 ---
 

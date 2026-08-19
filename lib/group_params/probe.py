@@ -1,0 +1,415 @@
+# -*- coding: utf-8 -*-
+"""
+Survey the model and establish, empirically, what writes are actually possible.
+
+Every capability question here is answered by attempting the operation inside a
+transaction that is then rolled back, never by inferring from metadata.  Revit's
+rules about group members and "vary by group instance" are not fully documented
+and differ by version, data type and binding, so guessing produces a tool that
+fails halfway through a run.  A probe costs one transaction and is exact.
+
+Nothing in this module modifies the model.
+"""
+
+
+def _dbtype(name):
+    """
+    Return the Autodesk.Revit.DB type called *name*.
+
+    IronPython sometimes cannot resolve a .NET type via 'from X import Y' when
+    the importing module is inside a Python package, so fall back to reflection
+    off a type that always imports.
+    """
+    try:
+        mod = __import__('Autodesk.Revit.DB', fromlist=[name])
+        return getattr(mod, name)
+    except (ImportError, AttributeError):
+        pass
+
+    import clr
+    from Autodesk.Revit.DB import Transaction as _anchor
+    t = clr.GetClrType(_anchor).Assembly.GetType('Autodesk.Revit.DB.' + name)
+    if t is None:
+        raise ImportError(
+            'Cannot resolve Autodesk.Revit.DB.{} in this Revit version.'
+            .format(name))
+    return t
+
+
+def eid_int(element_id):
+    """Integer of an ElementId — Revit 2024+ uses .Value, earlier .IntegerValue."""
+    v = getattr(element_id, 'Value', None)
+    if v is None:
+        v = getattr(element_id, 'IntegerValue', None)
+    return v
+
+
+# ── Reading parameter values ──────────────────────────────────────────────────
+
+def param_by_name(element, name):
+    """The first non-null parameter on *element* called *name*."""
+    try:
+        for p in element.Parameters:
+            if p.Definition is not None and p.Definition.Name == name:
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def read_value(element, name):
+    """
+    Parameter value as a display string, or '' when absent or empty.
+
+    Used both for grouping elements and for pre-filling the mapping table, so it
+    has to be stable: the same underlying value must always render identically
+    or rows would split apart.
+    """
+    p = param_by_name(element, name)
+    if p is None:
+        return u''
+    try:
+        if not p.HasValue:
+            return u''
+        st = p.StorageType.ToString()
+        if st == 'String':
+            return p.AsString() or u''
+        if st == 'Integer':
+            return u'{}'.format(p.AsInteger())
+        if st == 'Double':
+            # AsValueString honours project units; fall back to the raw double.
+            return p.AsValueString() or u'{}'.format(p.AsDouble())
+        if st == 'ElementId':
+            return p.AsValueString() or u'{}'.format(eid_int(p.AsElementId()))
+    except Exception:
+        pass
+    return u''
+
+
+def writable_parameter_names(element):
+    """Names of parameters on *element* that can be written."""
+    out = set()
+    try:
+        for p in element.Parameters:
+            if p.Definition is None or p.IsReadOnly:
+                continue
+            out.add(p.Definition.Name)
+    except Exception:
+        pass
+    return sorted(out)
+
+
+def all_parameter_names(element):
+    """Every parameter name on *element*, writable or not (for grouping by)."""
+    out = set()
+    try:
+        for p in element.Parameters:
+            if p.Definition is not None:
+                out.add(p.Definition.Name)
+    except Exception:
+        pass
+    return sorted(out)
+
+
+# ── Project parameter binding ─────────────────────────────────────────────────
+
+class Binding(object):
+    """What the project parameter bindings say about one parameter."""
+
+    def __init__(self, name):
+        self.name          = name
+        self.definition    = None    # InternalDefinition, when it is a project param
+        self.is_instance   = None    # True / False / None when unknown
+        self.type_name     = u''     # data type, best effort
+        self.varies        = None    # current GetAllowVaryBetweenGroups
+        self.can_enable    = None    # filled in by probe_vary_capability
+        self.reason        = u''     # why it cannot be enabled
+
+    @property
+    def is_project_parameter(self):
+        return self.definition is not None
+
+
+def find_binding(doc, name):
+    """
+    Locate *name* in the document's project parameter bindings.
+
+    Built-in parameters are absent from BindingMap, which is itself the answer to
+    "why is the checkbox greyed out" for them: the vary-by-group setting only
+    exists for project and shared parameters.
+    """
+    info = Binding(name)
+
+    try:
+        InstanceBinding = _dbtype('InstanceBinding')
+    except Exception:
+        InstanceBinding = None
+
+    try:
+        it = doc.ParameterBindings.ForwardIterator()
+        it.Reset()
+        while it.MoveNext():
+            definition = it.Key
+            if definition is None or definition.Name != name:
+                continue
+
+            info.definition = definition
+            binding = it.Current
+            if InstanceBinding is not None:
+                info.is_instance = isinstance(binding, InstanceBinding)
+
+            info.type_name = _data_type_name(definition)
+
+            try:
+                info.varies = definition.GetAllowVaryBetweenGroups(doc)
+            except Exception:
+                info.varies = None
+            break
+    except Exception:
+        pass
+
+    return info
+
+
+def _data_type_name(definition):
+    """Human-readable data type of a parameter definition, across API versions."""
+    # Revit 2022+ : GetDataType() returns a ForgeTypeId
+    try:
+        ftid = definition.GetDataType()
+        s = ftid.TypeId if hasattr(ftid, 'TypeId') else str(ftid)
+        if s:
+            # "autodesk.spec.aec:length-2.0.0" -> "length"
+            tail = s.split(':')[-1]
+            return tail.split('-')[0] or s
+    except Exception:
+        pass
+    # Older API
+    try:
+        return definition.ParameterType.ToString()
+    except Exception:
+        return u''
+
+
+# ── Capability probes (all rolled back) ───────────────────────────────────────
+
+def probe_vary_capability(doc, binding):
+    """
+    Determine whether "Values can vary by group instance" can be turned on.
+
+    Attempted for real and rolled back, because the whitelist is undocumented
+    and version-dependent — SetAllowVaryBetweenGroups throws ArgumentException
+    for a type it does not support, and that exception is the only reliable
+    answer available.
+
+    Fills binding.can_enable and binding.reason; returns binding.
+    """
+    from Autodesk.Revit.DB import Transaction
+
+    if binding.definition is None:
+        binding.can_enable = False
+        binding.reason = (
+            'Not a project or shared parameter. Built-in parameters have no '
+            '"vary by group instance" setting at all.')
+        return binding
+
+    if binding.is_instance is False:
+        binding.can_enable = False
+        binding.reason = (
+            'Bound as a TYPE parameter. Only instance parameters can vary by '
+            'group instance, because a type is shared by definition.')
+        return binding
+
+    if binding.varies:
+        binding.can_enable = True
+        binding.reason = u'Already enabled.'
+        return binding
+
+    t = Transaction(doc, 'LB - probe vary by group (rolled back)')
+    try:
+        t.Start()
+        binding.definition.SetAllowVaryBetweenGroups(doc, True)
+        binding.can_enable = True
+        binding.reason = u'Supported for this parameter.'
+    except Exception as exc:
+        binding.can_enable = False
+        binding.reason = (
+            'Revit refuses it for this data type ({}). Length and Yes/No are '
+            'excluded by design. [{}]'.format(
+                binding.type_name or 'unknown', _short(exc)))
+    finally:
+        try:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+        except Exception:
+            pass
+
+    return binding
+
+
+def probe_write(doc, element, param_name, value):
+    """
+    Try writing *value* and roll it back. Returns (ok, reason).
+
+    Used to establish up front whether the run can succeed at all, rather than
+    discovering it partway through and leaving a half-applied model.
+    """
+    from Autodesk.Revit.DB import Transaction
+
+    t = Transaction(doc, 'LB - probe parameter write (rolled back)')
+    try:
+        t.Start()
+        ok, reason = set_value(element, param_name, value)
+        return ok, reason
+    except Exception as exc:
+        return False, _short(exc)
+    finally:
+        try:
+            if t.HasStarted() and not t.HasEnded():
+                t.RollBack()
+        except Exception:
+            pass
+
+
+def _short(exc):
+    """First line of an exception message, trimmed."""
+    msg = str(exc).strip().split('\n')[0]
+    return msg[:220]
+
+
+# ── Writing ───────────────────────────────────────────────────────────────────
+
+def set_value(element, param_name, value):
+    """
+    Write *value* (a string) to *param_name*, coercing to the storage type.
+
+    Returns (ok, reason). Never raises for an ordinary refusal — the caller
+    collects reasons and reports them per element.
+    """
+    p = param_by_name(element, param_name)
+    if p is None:
+        return False, 'parameter not present on this element'
+    if p.IsReadOnly:
+        return False, 'parameter is read-only'
+
+    text = u'' if value is None else u'{}'.format(value).strip()
+
+    try:
+        st = p.StorageType.ToString()
+
+        if st == 'String':
+            return (True, None) if p.Set(text) else (False, 'Set() refused the value')
+
+        if st == 'Integer':
+            if text == u'':
+                return False, 'no value given'
+            low = text.lower()
+            if low in ('yes', 'true'):
+                iv = 1
+            elif low in ('no', 'false'):
+                iv = 0
+            else:
+                try:
+                    iv = int(round(float(text)))
+                except ValueError:
+                    return False, '"{}" is not a whole number'.format(text)
+            return (True, None) if p.Set(iv) else (False, 'Set() refused the value')
+
+        if st == 'Double':
+            if text == u'':
+                return False, 'no value given'
+            # SetValueString applies project units, which is what the user typed.
+            try:
+                if p.SetValueString(text):
+                    return True, None
+            except Exception:
+                pass
+            try:
+                return ((True, None) if p.Set(float(text))
+                        else (False, 'Set() refused the value'))
+            except ValueError:
+                return False, '"{}" is not a number'.format(text)
+
+        return False, 'unsupported storage type {}'.format(st)
+
+    except Exception as exc:
+        return False, _short(exc)
+
+
+# ── Group survey ──────────────────────────────────────────────────────────────
+
+class GroupSurvey(object):
+    def __init__(self):
+        self.instances_per_type = {}   # group type id int -> instance count
+        self.type_name = {}            # group type id int -> name
+        self.member_group = {}         # element id int -> group type id int
+
+    def group_type_of(self, element):
+        return self.member_group.get(eid_int(element.Id))
+
+    def is_grouped(self, element):
+        return self.group_type_of(element) is not None
+
+    def instance_count_for(self, element):
+        gt = self.group_type_of(element)
+        return self.instances_per_type.get(gt, 0) if gt is not None else 0
+
+
+def survey_groups(doc):
+    """
+    Map every group member to its group type, and count instances per type.
+
+    The instance count matters: a group type with exactly one instance accepts
+    parameter writes on its members even when the parameter cannot vary by
+    group, because Revit has nothing to propagate the change to.
+    """
+    from Autodesk.Revit.DB import FilteredElementCollector
+    Group = _dbtype('Group')
+
+    survey = GroupSurvey()
+
+    for grp in (FilteredElementCollector(doc)
+                .OfClass(Group)
+                .WhereElementIsNotElementType()
+                .ToElements()):
+        try:
+            gt_id = eid_int(grp.GetTypeId())
+        except Exception:
+            continue
+
+        survey.instances_per_type[gt_id] = survey.instances_per_type.get(gt_id, 0) + 1
+
+        if gt_id not in survey.type_name:
+            try:
+                gt = doc.GetElement(grp.GetTypeId())
+                survey.type_name[gt_id] = gt.Name if gt is not None else '<group>'
+            except Exception:
+                survey.type_name[gt_id] = '<group>'
+
+        try:
+            for mid in grp.GetMemberIds():
+                survey.member_group[eid_int(mid)] = gt_id
+        except Exception:
+            pass
+
+    return survey
+
+
+def collect_elements(doc, category_bic):
+    """Placed elements of one built-in category, excluding unplaced rooms."""
+    from Autodesk.Revit.DB import FilteredElementCollector
+
+    out = []
+    for el in (FilteredElementCollector(doc)
+               .OfCategory(category_bic)
+               .WhereElementIsNotElementType()
+               .ToElements()):
+        # An unplaced or redundant room has no area and cannot hold useful data;
+        # including them would create phantom rows in the mapping table.
+        try:
+            if hasattr(el, 'Area') and el.Area == 0 and hasattr(el, 'Location'):
+                if el.Location is None:
+                    continue
+        except Exception:
+            pass
+        out.append(el)
+    return out
