@@ -433,6 +433,29 @@ Geometry is checked before values for that reason.
 - Any per-instance value that could not be written back is treated as a blocker,
   not a nuisance — that data would be lost.
 
+### Key schedules — the route that avoids the problem entirely
+
+Worth trying **before** any rebuild. If the target parameter is a field in a
+**key schedule**, its value lives on the **key element**, which is not inside any
+group. Changing it is then an edit to the key, not to a group member, and the
+group restriction never applies.
+
+That converts an unsolvable problem into a one-off setup cost:
+
+1. Create a key schedule for the category with the parameter as a field.
+2. Assign the key to each element **once**.
+3. From then on, change the value on the key — no grouped write, ever.
+
+The remaining question is whether step 2 is itself blocked, since the key
+parameter sits on a grouped element. Select the **key parameter** as the target
+and press *Analyse*: the write probe answers it against the live model. The tool
+supports this because it resolves key names to key elements —
+`probe.key_options()` collects them by passing the key schedule's view id to
+`FilteredElementCollector`, and `set_value()` handles `ElementId` storage.
+
+Note that a key-driven parameter becomes **read-only** on the element, so this
+suits "one value per type of thing" and not per-element exceptions.
+
 ### What is not possible
 
 `PostableCommand` has no Edit Group entry, and pyRevit deliberately **disables

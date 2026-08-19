@@ -58,6 +58,7 @@ class GroupParamDialog(object):
         self._survey   = None
         self._plan     = None
         self._boxes    = {}   # row key -> TextBox
+        self._id_options = {} # key name -> ElementId, for key parameters
         self._write_probe = None   # (ok, reason) from a rolled-back real write
         # The real rebuild stays locked until a dry run has come back clean —
         # it rewrites group definitions, so it should never be the first thing
@@ -195,6 +196,18 @@ class GroupParamDialog(object):
 
     # ── Rows ──────────────────────────────────────────────────────────────────
 
+    def _target_is_elementid(self):
+        """True when the target parameter stores an ElementId (e.g. a key)."""
+        if not self._elements:
+            return False
+        p = probe.param_by_name(self._elements[0], self._target())
+        if p is None:
+            return False
+        try:
+            return p.StorageType.ToString() == 'ElementId'
+        except Exception:
+            return False
+
     def _capture_typed(self):
         """The values currently typed, keyed by row, so a refresh can restore them."""
         self._flush_values()
@@ -266,6 +279,17 @@ class GroupParamDialog(object):
             return
 
         self._rows = gapply.build_rows(self._elements, group_by, target)
+
+        # Key-schedule keys, for a target with ElementId storage. Setting a key
+        # means resolving a name to the key element that carries it.
+        self._id_options = {}
+        if self._target_is_elementid():
+            try:
+                self._id_options = probe.key_options(
+                    self._doc, self._selected_category())
+            except Exception:
+                self._id_options = {}
+
         self._binding = probe.find_binding(self._doc, target)
         probe.probe_vary_capability(self._doc, self._binding)
         self._probe_grouped_write()
@@ -301,7 +325,8 @@ class GroupParamDialog(object):
         # would accept even where a genuine change is refused.
         test_value = probe.distinct_test_value(probe.read_value(sample, target))
         self._write_probe = probe.probe_write(
-            self._doc, sample, target, test_value)
+            self._doc, sample, target, test_value,
+            id_options=self._id_options)
 
     def _clear_rows(self):
         if self._container is None:
@@ -472,6 +497,18 @@ class GroupParamDialog(object):
                                 'attempted and Revit refused it: {}'
                                 .format(self._write_probe[1]))
                 t2.Foreground = Brushes.Firebrick
+
+        if self._id_options:
+            t1 = self._win.FindName('DiagParamText')
+            if t1 is not None:
+                t1.Text += (
+                    '  This is a KEY parameter with {} key(s) available: {}. '
+                    'Type a key name in the NEW column. Setting the key drives '
+                    'every field of its key schedule, so those values then live '
+                    'on the key rather than on each room — change them once '
+                    'there, with no grouped write at all.'.format(
+                        len(self._id_options),
+                        ', '.join(sorted(self._id_options)[:8])))
 
         t3 = self._win.FindName('DiagGroupText')
         if t3 is not None:
@@ -717,7 +754,8 @@ class GroupParamDialog(object):
             reports.append(regroup.rebuild_group_type(
                 self._doc, type_eid, values,
                 self._target(), self._group_by(), dry_run=dry_run,
-                auto_resolve=self._auto_resolve()))
+                auto_resolve=self._auto_resolve(),
+                id_options=self._id_options))
 
         if not reports:
             self._status('Could not resolve the group types to rebuild. '
@@ -750,7 +788,8 @@ class GroupParamDialog(object):
 
         report = gapply.apply(
             self._doc, subset, self._target(), self._binding, self._survey,
-            enable_vary=self._enable_vary(), restore_vary=self._restore_vary())
+            enable_vary=self._enable_vary(), restore_vary=self._restore_vary(),
+            id_options=self._id_options)
 
         self._refresh_model_state(
             dict((row.key, row.value) for row in self._rows))

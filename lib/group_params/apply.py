@@ -177,7 +177,7 @@ def plan(doc, rows, target, binding, survey, grouped_write_ok=None):
 # ── Applying ──────────────────────────────────────────────────────────────────
 
 def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
-          restore_vary=False):
+          restore_vary=False, id_options=None):
     """
     Write the planned values in a single transaction.
 
@@ -232,7 +232,8 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
                 report['skipped'] += 1
                 continue
 
-            ok, reason = probe.set_value(el, target, value)
+            ok, reason = probe.set_value(el, target, value,
+                                        id_options=id_options)
             if ok:
                 report['written'] += 1
             else:

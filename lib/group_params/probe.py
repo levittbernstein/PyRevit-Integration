@@ -321,7 +321,7 @@ def _install_capture(transaction, capture):
         pass
 
 
-def probe_write(doc, element, param_name, value):
+def probe_write(doc, element, param_name, value, id_options=None):
     """
     Try writing *value* for real, force validation, then roll back.
 
@@ -345,7 +345,7 @@ def probe_write(doc, element, param_name, value):
         t.Start()
         _install_capture(t, capture)
 
-        ok, reason = set_value(element, param_name, value)
+        ok, reason = set_value(element, param_name, value, id_options=id_options)
         if not ok:
             return False, reason
 
@@ -467,9 +467,61 @@ def _short(exc):
 
 # ── Writing ───────────────────────────────────────────────────────────────────
 
-def set_value(element, param_name, value):
+def key_options(doc, category_bic=None):
+    """
+    {key name: ElementId} for every key-schedule key in the document.
+
+    Key schedule entries are elements that live inside the key schedule view, so
+    they are collected by passing the view id to FilteredElementCollector.
+
+    Needed because a key parameter has ElementId storage: setting it means
+    resolving a name like '1B2P' to the key element that carries it.
+    """
+    from Autodesk.Revit.DB import FilteredElementCollector
+    ViewSchedule = _dbtype('ViewSchedule')
+
+    wanted = None
+    if category_bic is not None:
+        try:
+            wanted = int(category_bic)
+        except (TypeError, ValueError):
+            wanted = None
+
+    out = {}
+    for vs in (FilteredElementCollector(doc)
+               .OfClass(ViewSchedule)
+               .ToElements()):
+        try:
+            definition = vs.Definition
+            if not definition.IsKeySchedule:
+                continue
+            if wanted is not None:
+                if eid_int(definition.CategoryId) != wanted:
+                    continue
+        except Exception:
+            continue
+
+        try:
+            for key_el in FilteredElementCollector(doc, vs.Id).ToElements():
+                try:
+                    name = key_el.Name
+                except Exception:
+                    continue
+                if name:
+                    out[name] = key_el.Id
+        except Exception:
+            continue
+
+    return out
+
+
+def set_value(element, param_name, value, id_options=None):
     """
     Write *value* (a string) to *param_name*, coercing to the storage type.
+
+    *id_options* maps a display name to an ElementId, for parameters with
+    ElementId storage such as a key-schedule key. Without it an ElementId
+    parameter cannot be written at all.
 
     Returns (ok, reason). Never raises for an ordinary refusal — the caller
     collects reasons and reports them per element.
@@ -517,6 +569,24 @@ def set_value(element, param_name, value):
                         else (False, 'Set() refused the value'))
             except ValueError:
                 return False, '"{}" is not a number'.format(text)
+
+        if st == 'ElementId':
+            if text == u'':
+                return False, 'no value given'
+            options = id_options or {}
+            eid = options.get(text)
+            if eid is None:
+                # Case-insensitive second attempt — key names typed by hand
+                # rarely match capitalisation exactly.
+                for name, candidate in options.items():
+                    if name.strip().lower() == text.lower():
+                        eid = candidate
+                        break
+            if eid is None:
+                return False, (
+                    '"{}" is not one of the available keys ({} known)'.format(
+                        text, len(options)))
+            return (True, None) if p.Set(eid) else (False, 'Set() refused the key')
 
         return False, 'unsupported storage type {}'.format(st)
 

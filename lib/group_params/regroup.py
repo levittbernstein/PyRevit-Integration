@@ -396,7 +396,7 @@ class RebuildReport(object):
 
 
 def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
-                       dry_run=True, auto_resolve=False):
+                       dry_run=True, auto_resolve=False, id_options=None):
     """
     Rebuild one group type with new *target* values.
 
@@ -479,7 +479,8 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             wanted = values_by_key[key]
             if not wanted or probe.read_value(el, target) == wanted:
                 continue
-            ok, reason = probe.set_value(el, target, wanted)
+            ok, reason = probe.set_value(el, target, wanted,
+                                        id_options=id_options)
             if ok:
                 report.written += 1
             else:
@@ -597,7 +598,8 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
                         continue
                     # The swap overwrote it with the definition's value, so put
                     # the instance's own value back.
-                    ok, reason = probe.set_value(el, name, value)
+                    ok, reason = probe.set_value(el, name, value,
+                                                id_options=id_options)
                     if ok:
                         report.restored += 1
                     else:
