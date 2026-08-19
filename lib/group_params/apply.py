@@ -184,7 +184,7 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
     Returns a report dict. Per-element refusals are collected rather than raised,
     so one awkward element cannot abort the whole run.
     """
-    from Autodesk.Revit.DB import Transaction
+    from Autodesk.Revit.DB import Transaction, TransactionStatus
 
     report = {
         'written':        0,
@@ -203,9 +203,15 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
 
     original_varies = bool(binding.varies)
 
+    # Capture Revit's failures rather than letting them raise a modal dialog.
+    # That dialog offers an "Ungroup" button, and a user pressing it to force a
+    # value through would ungroup their model — so it must never appear.
+    capture = probe.make_failure_capture(rollback_on_error=True)
+
     t = Transaction(doc, 'LB - Set Parameter in Groups')
     try:
         t.Start()
+        probe._install_capture(t, capture)
 
         # Step 2: lift the group restriction if we can and need to.
         if plan_obj.needs_vary and enable_vary and binding.can_enable:
@@ -253,8 +259,25 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
             except Exception:
                 pass
 
-        t.Commit()
-        report['committed'] = True
+        # Commit() returns a status; it does not raise when Revit rejects the
+        # changes. Trusting it blindly is what made the tool report 130 values
+        # written when none of them persisted.
+        status = t.Commit()
+        report['committed'] = (status == TransactionStatus.Committed)
+
+        if not report['committed']:
+            detail = capture.messages[0] if capture.messages else (
+                'Revit rejected the changes at commit time.')
+            report['error'] = (
+                'NOTHING WAS SAVED. Revit rejected the changes and rolled them '
+                'back: {}\n\n'
+                'Parameter.Set() reports success on a grouped element, but the '
+                'restriction is enforced at commit. Use "Rebuild: dry run" '
+                'instead — it rewrites the group definitions properly.'
+                .format(detail))
+            report['written'] = 0        # nothing persisted, so claim nothing
+            report['vary_enabled'] = False
+            report['vary_restored'] = False
 
     except Exception as exc:
         try:

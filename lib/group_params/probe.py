@@ -246,23 +246,105 @@ def probe_vary_capability(doc, binding):
     return binding
 
 
+def make_failure_capture(rollback_on_error=True):
+    """
+    A failure preprocessor that records Revit's failures instead of showing them.
+
+    Two reasons this matters.  First, Parameter.Set() returns True on a group
+    member; the group restriction is only enforced later through the failure
+    system, so failures are the ONLY place the refusal appears.  Second, Revit's
+    own dialog for that failure offers an "Ungroup" button — leaving it to
+    appear would invite a user to ungroup their model to force a value through.
+    Capturing the failure and rolling back removes that trap.
+    """
+    from Autodesk.Revit.DB import (
+        IFailuresPreprocessor, FailureProcessingResult, FailureSeverity,
+    )
+
+    class _Capture(IFailuresPreprocessor):
+        def __init__(self):
+            self.messages = []
+            self.had_error = False
+
+        def PreprocessFailures(self, accessor):
+            errors = []
+            for failure in accessor.GetFailureMessages():
+                try:
+                    text = failure.GetDescriptionText()
+                except Exception:
+                    text = u''
+                try:
+                    is_error = failure.GetSeverity() == FailureSeverity.Error
+                except Exception:
+                    is_error = False
+
+                self.messages.append(text)
+                if is_error:
+                    self.had_error = True
+                    errors.append(failure)
+                else:
+                    try:
+                        accessor.DeleteWarning(failure)
+                    except Exception:
+                        pass
+
+            if errors and rollback_on_error:
+                return FailureProcessingResult.ProceedWithRollBack
+            return FailureProcessingResult.Continue
+
+    return _Capture()
+
+
+def _install_capture(transaction, capture):
+    try:
+        opts = transaction.GetFailureHandlingOptions()
+        opts.SetFailuresPreprocessor(capture)
+        opts.SetClearAfterRollback(True)
+        transaction.SetFailureHandlingOptions(opts)
+    except Exception:
+        pass
+
+
 def probe_write(doc, element, param_name, value):
     """
-    Try writing *value* and roll it back. Returns (ok, reason).
+    Try writing *value* for real, force validation, then roll back.
 
-    Establishes whether a write is genuinely possible instead of inferring it
-    from a rule about group instance counts.  Rules about what Revit permits on
-    group members are undocumented and have edge cases — Revit sometimes creates
-    a new group rather than raising — so the only trustworthy answer is to ask
-    Revit and undo the answer.
+    Returns (ok, reason).
+
+    Set() alone proves nothing: it returns True for a group member and the
+    refusal only appears when Revit validates the change.  So this regenerates
+    the document inside the probe transaction and treats any captured error as a
+    refusal.  Without the regenerate step this function reports success for
+    writes that cannot possibly persist — which is exactly the bug that let the
+    tool claim it had written 130 values it had not.
+
+    Errs towards "not writable": if validation cannot be forced, the answer is
+    no rather than an optimistic yes.
     """
     from Autodesk.Revit.DB import Transaction
 
+    capture = make_failure_capture(rollback_on_error=True)
     t = Transaction(doc, 'LB - probe parameter write (rolled back)')
     try:
         t.Start()
+        _install_capture(t, capture)
+
         ok, reason = set_value(element, param_name, value)
-        return ok, reason
+        if not ok:
+            return False, reason
+
+        # This is what actually surfaces the group restriction.
+        try:
+            doc.Regenerate()
+        except Exception as exc:
+            return False, _short(exc)
+
+        if capture.had_error:
+            return False, (capture.messages[0] if capture.messages
+                           else 'Revit rejected the change')
+
+        return True, None
+
     except Exception as exc:
         return False, _short(exc)
     finally:

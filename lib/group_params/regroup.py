@@ -151,34 +151,21 @@ def snapshot_instance(doc, group, param_names):
 
 # ── Failure handling ──────────────────────────────────────────────────────────
 
-def _swallow_warnings(transaction):
+def _install_capture(transaction):
     """
-    Suppress Revit's warning dialogs during the rebuild.
+    Dismiss the warnings a rebuild legitimately raises; roll back on errors.
 
-    Ungrouping and regrouping raise warnings that would otherwise stop the run
-    with a modal dialog. Only WARNINGS are dismissed — genuine errors are left
-    to fail the transaction, which triggers the rollback.
+    Ungrouping and regrouping produce warnings that would otherwise stall the run
+    behind a modal dialog. Errors are different: Revit's group error dialog
+    offers an "Ungroup" button, and a user pressing it would ungroup their model
+    to force the change through. So errors abort the transaction instead of ever
+    reaching the screen.
+
+    Returns the capture object so its messages can be reported.
     """
-    from Autodesk.Revit.DB import (
-        IFailuresPreprocessor, FailureProcessingResult,
-    )
-
-    class _Swallow(IFailuresPreprocessor):
-        def PreprocessFailures(self, accessor):
-            for failure in accessor.GetFailureMessages():
-                try:
-                    accessor.DeleteWarning(failure)
-                except Exception:
-                    pass
-            return FailureProcessingResult.Continue
-
-    try:
-        opts = transaction.GetFailureHandlingOptions()
-        opts.SetFailuresPreprocessor(_Swallow())
-        opts.SetClearAfterRollback(True)
-        transaction.SetFailureHandlingOptions(opts)
-    except Exception:
-        pass
+    capture = probe.make_failure_capture(rollback_on_error=True)
+    probe._install_capture(transaction, capture)
+    return capture
 
 
 # ── The rebuild ───────────────────────────────────────────────────────────────
@@ -209,7 +196,7 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
     Returns a RebuildReport. Rolls back on dry_run or on any verification
     problem, so a failed attempt leaves the model untouched.
     """
-    from Autodesk.Revit.DB import Transaction, ElementId
+    from Autodesk.Revit.DB import Transaction, TransactionStatus, ElementId
     from System.Collections.Generic import List
 
     Group = probe._dbtype('Group')
@@ -218,9 +205,10 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
     param_names = restore_parameter_names(doc)
 
     t = Transaction(doc, 'LB - Rebuild group type')
+    capture = None
     try:
         t.Start()
-        _swallow_warnings(t)
+        capture = _install_capture(t)
 
         old_type = doc.GetElement(group_type_id)
         if old_type is None:
@@ -341,16 +329,35 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
                 'Could not restore the group type name: {}'.format(
                     probe._short(exc)))
 
+        # Force validation now so a refusal is caught here rather than silently
+        # at commit — Set() reports success on group members regardless.
+        try:
+            doc.Regenerate()
+        except Exception as exc:
+            report.problems.append(
+                'Validation failed after the rebuild: {}'.format(
+                    probe._short(exc)))
+
+        if capture is not None and capture.had_error:
+            report.problems.append(
+                'Revit raised an error during the rebuild: {}'.format(
+                    capture.messages[0] if capture.messages else 'unknown'))
+
         # 8. Commit only if this is a real run AND nothing went wrong.
-        if dry_run:
-            report.rolled_back = True
-            t.RollBack()
-        elif not report.ok:
+        if dry_run or not report.ok:
             report.rolled_back = True
             t.RollBack()
         else:
-            t.Commit()
-            report.committed = True
+            # Commit() returns a status rather than raising when Revit rejects
+            # the transaction, so it has to be checked.
+            status = t.Commit()
+            report.committed = (status == TransactionStatus.Committed)
+            if not report.committed:
+                report.rolled_back = True
+                report.problems.append(
+                    'Revit rejected the rebuild at commit and rolled it back: '
+                    '{}'.format(capture.messages[0]
+                                if (capture and capture.messages) else 'unknown'))
 
     except Exception as exc:
         if not report.problems:

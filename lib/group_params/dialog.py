@@ -607,25 +607,30 @@ class GroupParamDialog(object):
         self._recount()
         p = self._plan
 
-        if p is None or not p.blocked_by_type:
-            self._status('Nothing needs rebuilding — either there is nothing '
-                         'blocked, or the values can be written directly with '
-                         'Apply.', error=True)
+        if p is None or not p.to_write:
+            self._status('Nothing to rebuild — set some values first.',
+                         error=True)
             return
 
-        # Which group type ids are blocked, and the values each one needs.
+        # Driven by "is this element in a multi-instance group type and does it
+        # need a new value", NOT by whether the plan marked it blocked. Those are
+        # different questions, and gating on 'blocked' meant that whenever the
+        # write path looked available the rebuild route was locked out — which is
+        # precisely when the user needed it.
         by_type_id = {}
-        for el, key, _reason in p.blocked:
-            gt_id = self._survey.group_type_of(el)
-            if gt_id is None:
+        for el, value, key in p.to_write:
+            if self._survey.instance_count_for(el) <= 1:
                 continue
-            row_value = None
-            for row in self._rows:
-                if row.key == key:
-                    row_value = row.value
-                    break
-            if row_value:
-                by_type_id.setdefault(gt_id, {})[key] = row_value
+            gt_id = self._survey.group_type_of(el)
+            if gt_id is None or not value:
+                continue
+            by_type_id.setdefault(gt_id, {})[key] = value
+
+        if not by_type_id:
+            self._status('Nothing needs rebuilding — none of the pending '
+                         'changes are inside a group type with several '
+                         'instances, so Apply will handle them.', error=True)
+            return
 
         from Autodesk.Revit.DB import ElementId
         reports = []

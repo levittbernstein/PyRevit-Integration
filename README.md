@@ -339,9 +339,18 @@ guessing from parameter metadata:
    there is nothing to propagate the change to.
 
 Anything left over — a member of a multi-instance group type whose parameter
-cannot vary — is genuinely impossible from outside Edit Group mode. Rather than
-predicting that from instance counts, the tool **attempts one real write and
-rolls it back**, so the verdict comes from Revit rather than from a rule.
+cannot vary — is genuinely impossible from outside Edit Group mode. The tool
+attempts one real write, **forces a regenerate**, and rolls it back, so the
+verdict comes from Revit rather than from a rule.
+
+> **`Parameter.Set()` lies about grouped elements.** It returns `True`, and the
+> group restriction is only enforced later, when Revit validates the change.
+> A probe that just calls `Set()` and rolls back therefore reports success for
+> writes that can never persist. `doc.Regenerate()` inside the probe
+> transaction is what actually surfaces the refusal, and
+> `Transaction.Commit()` **returns a status rather than raising** when Revit
+> rejects the change — so the status must be checked or the tool will report
+> values written that were silently rolled back.
 
 For those there are two routes.
 
@@ -551,6 +560,41 @@ the operation inside a transaction and roll it back — `group_params/probe.py`
 does this throughout, because Revit's rules are undocumented, version-dependent,
 and `SetAllowVaryBetweenGroups()` refuses unsupported data types with an
 exception that is the only reliable answer available.
+
+---
+
+### ❌ `Parameter.Set()` returns True on a grouped element, then fails at commit
+
+**Symptom:** a tool reports N values written, the model is unchanged, and Revit
+shows *"Changes to groups are allowed only in group edit mode"* with an
+**Ungroup** button.
+
+**Cause:** three separate traps, all hit at once.
+
+1. `Parameter.Set()` **succeeds** on a group member. The restriction is enforced
+   later, when Revit validates the change — so `Set()` returning `True` proves
+   nothing.
+2. `Transaction.Commit()` **returns a `TransactionStatus`** rather than raising
+   when Revit rejects the transaction. Ignoring the return value means treating a
+   rollback as a success.
+3. Revit's dialog for this failure offers **Ungroup**. Left to appear, it invites
+   a user to ungroup their model to force a value through.
+
+**Fix:**
+
+```python
+capture = probe.make_failure_capture(rollback_on_error=True)  # never show Ungroup
+t.Start(); probe._install_capture(t, capture)
+ok, _ = probe.set_value(el, name, value)     # True proves nothing
+doc.Regenerate()                             # THIS surfaces the refusal
+if capture.had_error: ...                    # refused
+status = t.Commit()                          # check it!
+if status != TransactionStatus.Committed:
+    written = 0                              # nothing persisted — claim nothing
+```
+
+Any code writing to elements that might be grouped should install a failure
+capture, force a regenerate, and check the commit status.
 
 ---
 
