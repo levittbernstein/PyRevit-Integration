@@ -93,30 +93,92 @@ def restore_parameter_names(doc):
 
 # ── Member identity ───────────────────────────────────────────────────────────
 
-def _match_key(doc, element, index):
-    """
-    A key that survives the member being recreated.
-
-    Position is used because the group instance stays put, so a member ends up in
-    the same place. Index is the fallback for members with no location point.
-    """
-    cat_id = None
+def _cat_of(element):
     try:
         if element.Category is not None:
-            cat_id = probe.eid_int(element.Category.Id)
+            return probe.eid_int(element.Category.Id)
     except Exception:
         pass
+    return None
 
+
+def _point_of(element):
+    """Rounded location point, or None."""
     try:
-        loc = element.Location
-        pt = getattr(loc, 'Point', None)
+        pt = getattr(element.Location, 'Point', None)
         if pt is not None:
-            return (cat_id, round(pt.X, _TOL), round(pt.Y, _TOL),
-                    round(pt.Z, _TOL))
+            return (round(pt.X, _TOL), round(pt.Y, _TOL), round(pt.Z, _TOL))
     except Exception:
         pass
+    return None
 
-    return (cat_id, 'index', index)
+
+def _match_key(doc, element, index):
+    """
+    Positional key, kept for the tests and for reporting.
+
+    Not sufficient on its own for matching recreated members — see
+    _match_records, which falls back to ordinal position within category when a
+    member's location does not survive recreation.
+    """
+    pt = _point_of(element)
+    if pt is not None:
+        return (_cat_of(element),) + pt
+    return (_cat_of(element), 'index', index)
+
+
+def _match_records(before, after):
+    """
+    Pair up pre-rebuild member records with post-rebuild ones.
+
+    Two passes, because neither key works alone:
+
+      1. Position within category. Reliable when a recreated member lands back
+         in exactly the same place.
+      2. Ordinal within category, for whatever pass 1 could not pair. Group
+         member order is derived from the same elements, so the nth room of a
+         category before is the nth room after — this catches members whose
+         location does not survive recreation, which single-key matching wrote
+         off as lost data.
+
+    Returns (pairs, unmatched_before).
+    """
+    remaining = list(after)
+    pairs = []
+
+    # Pass 1 — position.
+    by_pos = {}
+    for rec in remaining:
+        if rec['pt'] is not None:
+            by_pos.setdefault((rec['cat'],) + rec['pt'], []).append(rec)
+
+    leftover_before = []
+    for rec in before:
+        matched = None
+        if rec['pt'] is not None:
+            bucket = by_pos.get((rec['cat'],) + rec['pt'])
+            if bucket:
+                matched = bucket.pop(0)
+        if matched is not None:
+            pairs.append((rec, matched))
+            remaining.remove(matched)
+        else:
+            leftover_before.append(rec)
+
+    # Pass 2 — ordinal within category.
+    by_ord = {}
+    for rec in remaining:
+        by_ord.setdefault((rec['cat'], rec['ord']), []).append(rec)
+
+    unmatched_before = []
+    for rec in leftover_before:
+        bucket = by_ord.get((rec['cat'], rec['ord']))
+        if bucket:
+            pairs.append((rec, bucket.pop(0)))
+        else:
+            unmatched_before.append(rec)
+
+    return pairs, unmatched_before
 
 
 def _members_of(doc, group):
@@ -161,11 +223,25 @@ def _member_at(doc, group, key):
     return None
 
 
-def snapshot_instance(doc, group, param_names):
-    """{match_key: {param_name: value}} for one group instance."""
-    data = {}
+def member_records(doc, group, param_names):
+    """
+    One record per member of *group*: category, ordinal, position, values.
+
+    A list of records rather than a dict keyed on position, because position
+    alone is not a reliable identity for a recreated member and a dict throws
+    away the ordinal needed for the fallback match.
+
+    Members with no values are still recorded — a member whose per-instance
+    values were wiped by the swap has nothing to key on but is exactly the one
+    that needs repairing, and dropping it made the tool report it as lost while
+    never attempting a restore.
+    """
+    records = []
+    ordinals = {}
     for idx, el in _members_of(doc, group):
-        key = _match_key(doc, el, idx)
+        cat = _cat_of(el)
+        ordinals[cat] = ordinals.get(cat, 0) + 1
+
         vals = {}
         for name in param_names:
             p = probe.param_by_name(el, name)
@@ -174,8 +250,28 @@ def snapshot_instance(doc, group, param_names):
             value = probe.read_value(el, name)
             if value != u'':
                 vals[name] = value
-        if vals:
-            data[key] = vals
+
+        records.append({
+            'cat':  cat,
+            'ord':  ordinals[cat],
+            'pt':   _point_of(el),
+            'el':   el,
+            'vals': vals,
+            'idx':  idx,
+        })
+    return records
+
+
+def snapshot_instance(doc, group, param_names):
+    """
+    {match_key: {param_name: value}} — kept for the existing tests.
+
+    member_records() is what the rebuild uses.
+    """
+    data = {}
+    for rec in member_records(doc, group, param_names):
+        if rec['vals']:
+            data[_match_key(doc, rec['el'], rec['idx'])] = rec['vals']
     return data
 
 
@@ -262,11 +358,15 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             report.problems.append('Group type no longer exists.')
             raise RuntimeError('missing group type')
 
+        # GroupType.Name came back empty (or whitespace) in a real LB model, which
+        # both blanked the report and made the rename throw ArgumentException on
+        # an invalid name. Fall back to an instance's own name, and never attempt
+        # a rename with nothing usable.
+        old_name = u''
         try:
-            report.group_type = old_type.Name
+            old_name = (old_type.Name or u'').strip()
         except Exception:
-            report.group_type = u'<group>'
-        old_name = report.group_type
+            old_name = u''
 
         from Autodesk.Revit.DB import FilteredElementCollector
         instances = [g for g in FilteredElementCollector(doc)
@@ -280,10 +380,17 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             report.problems.append('No instances of this group type.')
             raise RuntimeError('no instances')
 
+        if not old_name:
+            try:
+                old_name = (instances[0].Name or u'').strip()
+            except Exception:
+                old_name = u''
+        report.group_type = old_name or u'<unnamed group>'
+
         # 1. Snapshot per-instance data for every instance BEFORE anything moves.
         snapshots = {}
         for g in instances:
-            snapshots[probe.eid_int(g.Id)] = snapshot_instance(doc, g, param_names)
+            snapshots[probe.eid_int(g.Id)] = member_records(doc, g, param_names)
 
         victim = instances[0]
         victim_id = probe.eid_int(victim.Id)
@@ -359,42 +466,41 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
                 pairs.append((g, probe.eid_int(gid)))
 
         for g, snapshot_key in pairs:
-            before = snapshots.get(snapshot_key) or {}
-            after = snapshot_instance(doc, g, param_names)
+            before = snapshots.get(snapshot_key) or []
+            after = member_records(doc, g, param_names)
 
             report.members_before += len(before)
             report.members_after += len(after)
 
-            for key, wanted in before.items():
-                current = after.get(key)
+            matched, unmatched = _match_records(before, after)
 
-                if current is None:
-                    # No member at that key. The data may simply have re-keyed
-                    # (member recreated a hair off), so look for it anywhere in
-                    # this instance before calling it lost.
-                    if _values_present(wanted, after, skip=target):
-                        report.rekeyed += 1
-                    else:
-                        for name, value in wanted.items():
-                            if name != target:
-                                report.lost.append((name, value))
-                    continue
-
-                for name, value in wanted.items():
+            for old_rec, new_rec in matched:
+                el = new_rec['el']
+                for name, value in old_rec['vals'].items():
                     if name == target:
                         continue                   # deliberately changed
-                    if current.get(name) == value:
+                    if new_rec['vals'].get(name) == value:
                         report.preserved += 1
                         continue
-                    el = _member_at(doc, g, key)
-                    if el is None:
-                        report.lost.append((name, value))
-                        continue
+                    # The swap overwrote it with the definition's value, so put
+                    # the instance's own value back.
                     ok, reason = probe.set_value(el, name, value)
                     if ok:
                         report.restored += 1
                     else:
                         report.restore_failed.append((name, reason))
+
+            # Only a member that could not be paired at all is a candidate for
+            # real loss, and even then the value may have re-keyed onto another
+            # member of the same instance.
+            after_vals = dict((i, r['vals']) for i, r in enumerate(after))
+            for old_rec in unmatched:
+                if _values_present(old_rec['vals'], after_vals, skip=target):
+                    report.rekeyed += 1
+                else:
+                    for name, value in old_rec['vals'].items():
+                        if name != target:
+                            report.lost.append((name, value))
 
         # 7. Reclaim the original name so the model reads as before.
         #    Cosmetic only — a failure here must NOT discard a good rebuild.
