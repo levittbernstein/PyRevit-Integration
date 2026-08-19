@@ -176,6 +176,9 @@
                 Content="Fill blanks" MinWidth="100"/>
         <Button x:Name="ClearAllBtn" Style="{StaticResource SmallButton}"
                 Content="Clear all" MinWidth="90"/>
+        <Button x:Name="KeySchedBtn" Style="{StaticResource SmallButton}"
+                Content="Set up key schedule" MinWidth="150"
+                ToolTip="Create a key schedule driving this parameter, one key per row above, and assign the keys. Values then live on the keys — which are not in any group — so future changes need no grouped write at all."/>
         <TextBlock Style="{StaticResource MetaLabel}" Margin="14,0,0,0"
                    Text="A blank row is left untouched. Rows already holding the value you type are skipped."/>
       </StackPanel>

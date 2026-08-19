@@ -100,6 +100,7 @@ class GroupParamDialog(object):
         hook('AnalyseBtn',    self._on_analyse)
         hook('FillBlanksBtn', self._on_fill_blanks)
         hook('ClearAllBtn',   self._on_clear_all)
+        hook('KeySchedBtn',   self._on_key_schedule)
         hook('PreviewBtn',     self._on_preview)
         hook('RebuildTestBtn', self._on_rebuild_dry)
         hook('RebuildBtn',     self._on_rebuild_real)
@@ -690,6 +691,111 @@ class GroupParamDialog(object):
             rows.append(['blocked', dtype, ', '.join(sorted(blocked[dtype]))[:90]])
         out.print_table(table_data=rows,
                         columns=['', 'Data type', 'Example parameters'])
+
+    # ── Key schedule ──────────────────────────────────────────────────────────
+
+    def _on_key_schedule(self, sender, e):
+        from group_params import keysched
+
+        if not self._ensure_fresh():
+            return
+        self._flush_values()
+        self._recount()
+
+        values = dict((row.key, row.value)
+                      for row in self._rows if row.key and row.value)
+        if not values:
+            self._status('Fill in the NEW column first — those become the values '
+                         'carried by each key.', error=True)
+            return
+
+        target = self._target()
+        report = keysched.setup(
+            self._doc, self._selected_category(), self._group_by(), target,
+            values, schedule_name='LB {} Key'.format(target))
+
+        self._report_key_schedule(report, target)
+        self._refresh_model_state(
+            dict((row.key, row.value) for row in self._rows))
+
+    def _report_key_schedule(self, report, target):
+        from pyrevit import script
+        out = script.get_output()
+
+        out.print_md('# Key schedule setup')
+        out.print_md(
+            'A key-driven parameter\'s value lives on the **key element**, and '
+            'keys are not inside any group — so changing it later needs no '
+            'grouped write at all. That is what makes this route immune to the '
+            'problem the rebuild ran into.')
+
+        out.print_md(
+            '- Schedule: **{}**{}\n'
+            '- Field added for "{}": **{}**\n'
+            '- Key parameter on the elements: **{}**\n'
+            '- Keys already present: **{}**, created: **{}**\n'
+            '- Key values set: **{}**\n'
+            '- Elements assigned a key: **{}**'.format(
+                report.schedule_name,
+                ' *(newly created)*' if report.created_schedule else '',
+                target, 'yes' if report.field_added else 'already present',
+                report.key_param or '(not detected)',
+                report.keys_existing, report.keys_created,
+                report.values_set, report.assigned))
+
+        if report.keys_needed:
+            out.print_md('## Keys you need to add by hand')
+            out.print_md(
+                'The Revit API has no documented equivalent of the schedule\'s '
+                '**Insert Data Row** button, so keys can only be created by '
+                'copying an existing one. Open **{}**, press *Insert Data Row* '
+                'once for each name below and set the Key Name, then run this '
+                'again — everything else will be filled in automatically.'
+                .format(report.schedule_name))
+            out.print_table(
+                table_data=[[n] for n in sorted(report.keys_needed)],
+                columns=['Key Name to create'])
+
+        if report.assign_failed:
+            out.print_md('## Elements whose key could not be assigned')
+            out.print_md(
+                'These are the grouped elements. **The key schedule itself is '
+                'created and populated** — only the assignment is outstanding, '
+                'and it is a one-off: once assigned, every future value change '
+                'is a single edit on the key.')
+            out.print_table(
+                table_data=[[str(eid), name, reason]
+                            for eid, name, reason in report.assign_failed[:60]],
+                columns=['Element id', 'Key', 'Reason'])
+            if len(report.assign_failed) > 60:
+                out.print_md('_{} more not listed._'.format(
+                    len(report.assign_failed) - 60))
+
+        if report.problems:
+            out.print_md('## Problems')
+            for msg in report.problems:
+                out.print_md('- {}'.format(msg))
+
+        if report.warnings:
+            out.print_md('## Notes')
+            for msg in report.warnings:
+                out.print_md('- {}'.format(msg))
+
+        if report.problems:
+            self._status('Key schedule setup hit problems — see the output '
+                         'window.', error=True)
+        elif report.keys_needed:
+            self._status('Key schedule "{}" created. {} key(s) must be added by '
+                         'hand first — see the output window.'.format(
+                             report.schedule_name, len(report.keys_needed)),
+                         error=True)
+        else:
+            self._status('Key schedule "{}" set up: {} key(s), {} value(s), {} '
+                         'element(s) assigned. Change values on the keys from '
+                         'now on.'.format(
+                             report.schedule_name,
+                             report.keys_existing + report.keys_created,
+                             report.values_set, report.assigned))
 
     # ── Rebuild group types ───────────────────────────────────────────────────
 

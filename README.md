@@ -440,18 +440,30 @@ Worth trying **before** any rebuild. If the target parameter is a field in a
 group. Changing it is then an edit to the key, not to a group member, and the
 group restriction never applies.
 
-That converts an unsolvable problem into a one-off setup cost:
+That converts an unsolvable problem into a one-off setup cost, and
+**"Set up key schedule"** does it in one press, assuming no key schedule exists:
 
-1. Create a key schedule for the category with the parameter as a field.
-2. Assign the key to each element **once**.
-3. From then on, change the value on the key — no grouped write, ever.
+1. Creates a key schedule for the category (or reuses one that's there).
+2. Adds the target parameter as a field — only **instance** parameters are
+   eligible.
+3. Creates one key per row in the values table.
+4. Writes each row's value onto its key. **Keys are not in groups, so these
+   writes are never blocked** — this is the point of the whole approach.
+5. Assigns each element the key matching its group-by value.
 
-The remaining question is whether step 2 is itself blocked, since the key
-parameter sits on a grouped element. Select the **key parameter** as the target
-and press *Analyse*: the write probe answers it against the live model. The tool
-supports this because it resolves key names to key elements —
-`probe.key_options()` collects them by passing the key schedule's view id to
-`FilteredElementCollector`, and `set_value()` handles `ElementId` storage.
+Steps 1–4 and step 5 are **separate transactions** on purpose: step 5 is the only
+part that writes to grouped elements, and a refusal there must not discard a
+correctly populated key schedule.
+
+**Creating keys has no API.** There is no documented equivalent of the
+schedule's *Insert Data Row*, so new keys are made by **copying an existing
+one** — which needs at least one row to exist. Where none does, the tool lists
+the exact Key Names to add by hand and asks you to re-run; everything else is
+then automatic.
+
+`probe.key_options()` collects key elements by passing the key schedule's view id
+to `FilteredElementCollector`, and `set_value()` handles `ElementId` storage so a
+key can be set by name.
 
 Note that a key-driven parameter becomes **read-only** on the element, so this
 suits "one value per type of thing" and not per-element exceptions.
