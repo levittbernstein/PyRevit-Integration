@@ -542,6 +542,32 @@ the keynote table — `KeynoteTable` exposes only `GetKeyBasedTreeEntries()`,
 
 ---
 
+### ❌ Element objects die across a transaction — even a rolled-back one
+
+**Symptom:** `Autodesk.Revit.Exceptions.InvalidObjectException: The referenced
+object is not valid, possibly because it has been deleted from the database, or
+its creation was undone` — thrown from something as innocent as `element.Id`.
+
+**Cause:** caching `Element` objects and reusing them after a transaction that
+recreated those elements. A **rollback restores the model but does not revive the
+wrappers you are holding**, which is the counter-intuitive part: a dry run that
+changed nothing still leaves every cached element dead. Group operations
+(`UngroupMembers`, `NewGroup`, `ChangeTypeId`) recreate members, so anything held
+across them is a dead reference.
+
+**Fix:** cache `ElementId`, not `Element`, and re-fetch with
+`doc.GetElement(id)` after any transaction. Where a long-lived dialog holds a
+collection, re-read the model rather than trying to patch it up — see
+`group_params.dialog._refresh_model_state()`, which re-collects and re-surveys
+while preserving what the user typed. `GroupSurvey.is_stale()` is the cheap test
+for whether that is needed.
+
+Note that `ElementId` values survive fine; it is only the wrappers that don't.
+So storing ids and re-resolving is both simpler and more robust than trying to
+keep object references alive.
+
+---
+
 ### ⚠️ The Revit API cannot edit group members either
 
 Worth knowing before designing anything that writes to grouped elements: the API

@@ -521,7 +521,15 @@ class GroupSurvey(object):
         self.type_eid = {}             # group type id int -> ElementId
 
     def group_type_of(self, element):
-        return self.member_group.get(eid_int(element.Id))
+        # Tolerates a stale element. Element wrappers are invalidated by any
+        # transaction that recreates them — INCLUDING one that was rolled back —
+        # and reading .Id then throws InvalidObjectException. The caller should
+        # be re-reading the model rather than relying on this, but a dead
+        # reference must not take the whole dialog down.
+        try:
+            return self.member_group.get(eid_int(element.Id))
+        except Exception:
+            return None
 
     def is_grouped(self, element):
         return self.group_type_of(element) is not None
@@ -529,6 +537,14 @@ class GroupSurvey(object):
     def instance_count_for(self, element):
         gt = self.group_type_of(element)
         return self.instances_per_type.get(gt, 0) if gt is not None else 0
+
+    def is_stale(self, element):
+        """True when *element* can no longer be read."""
+        try:
+            eid_int(element.Id)
+            return False
+        except Exception:
+            return True
 
 
 def survey_groups(doc):

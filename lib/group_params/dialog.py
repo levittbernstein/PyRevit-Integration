@@ -195,6 +195,65 @@ class GroupParamDialog(object):
 
     # ── Rows ──────────────────────────────────────────────────────────────────
 
+    def _capture_typed(self):
+        """The values currently typed, keyed by row, so a refresh can restore them."""
+        self._flush_values()
+        return dict((row.key, row.value) for row in self._rows)
+
+    def _ensure_fresh(self):
+        """
+        Re-read the model if the cached elements have gone stale.
+
+        Cheap guard for the paths that don't force a refresh: a single dead
+        element reference is enough to crash anything that reads .Id.
+        """
+        if not self._elements or self._survey is None:
+            return True
+        if not self._survey.is_stale(self._elements[0]):
+            return True
+        return self._refresh_model_state(self._capture_typed())
+
+    def _refresh_model_state(self, keep=None):
+        """
+        Re-read elements and groups from the document.
+
+        Required after ANY transaction that ungroups or regroups — including one
+        that was rolled back. A rollback restores the model but does not revive
+        the Element wrappers already held, so every cached element is dead and
+        reading .Id raises InvalidObjectException. Re-collecting is the only fix;
+        the ElementIds in the survey are fine, the objects are not.
+
+        *keep* maps row key -> typed value, so a refresh does not discard the
+        user's input.
+        """
+        keep = keep or {}
+        bic = self._selected_category()
+        if bic is None:
+            return False
+
+        try:
+            self._elements = probe.collect_elements(self._doc, bic)
+            self._survey = probe.survey_groups(self._doc)
+        except Exception as exc:
+            self._status('Could not re-read the model: {}'.format(exc),
+                         error=True)
+            return False
+
+        if not self._elements:
+            self._status('No placed elements of that category remain.',
+                         error=True)
+            return False
+
+        self._rebuild_rows()
+        for row in self._rows:
+            if row.key in keep:
+                row.value = keep[row.key]
+                box = self._boxes.get(row.key)
+                if box is not None:
+                    box.Text = keep[row.key]
+        self._recount()
+        return True
+
     def _rebuild_rows(self):
         group_by = self._group_by()
         target   = self._target()
@@ -457,6 +516,8 @@ class GroupParamDialog(object):
     # ── Preview ───────────────────────────────────────────────────────────────
 
     def _on_preview(self, sender, e):
+        if not self._ensure_fresh():
+            return
         self._flush_values()
         self._recount()
         if self._plan is None or not self._plan.to_write:
@@ -603,10 +664,14 @@ class GroupParamDialog(object):
     def _run_rebuild(self, dry_run):
         from group_params import regroup
 
-        self._flush_values()
-        self._recount()
-        p = self._plan
+        # Re-read the model first. A previous dry run performed real group
+        # operations before rolling back, which leaves every cached Element
+        # object dead — using them here is what raised InvalidObjectException.
+        typed = self._capture_typed()
+        if not self._refresh_model_state(typed):
+            return
 
+        p = self._plan
         if p is None or not p.to_write:
             self._status('Nothing to rebuild — set some values first.',
                          error=True)
@@ -632,8 +697,13 @@ class GroupParamDialog(object):
                          'instances, so Apply will handle them.', error=True)
             return
 
+        # Snapshot what we need BEFORE the first rebuild, because each rebuild
+        # invalidates the element objects the plan is holding.
+        type_ids = list(by_type_id.keys())
+
         reports = []
-        for gt_id, values in by_type_id.items():
+        for gt_id in type_ids:
+            values = by_type_id[gt_id]
             # The real ElementId from the survey, never ElementId(int) — that
             # round-trip resolved to the wrong element.
             type_eid = self._survey.type_eid.get(gt_id)
@@ -736,6 +806,16 @@ class GroupParamDialog(object):
                             for r in mismatch],
                 columns=['Group type', 'Members before', 'Members after'])
 
+        # Whether it committed or rolled back, the rebuild recreated elements, so
+        # everything cached is now dead. Re-read before the user can touch
+        # anything else.
+        typed = {}
+        try:
+            typed = dict((row.key, row.value) for row in self._rows)
+        except Exception:
+            pass
+        self._refresh_model_state(typed)
+
         if dry_run:
             if clean:
                 self._status('Dry run CLEAN across {} group type(s) — nothing '
@@ -755,6 +835,8 @@ class GroupParamDialog(object):
     # ── Apply / Close ─────────────────────────────────────────────────────────
 
     def _on_apply(self, sender, e):
+        if not self._ensure_fresh():
+            return
         self._flush_values()
         self._recount()
         if self._plan is None or not self._plan.to_write:
