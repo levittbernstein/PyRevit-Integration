@@ -632,12 +632,21 @@ class GroupParamDialog(object):
                          'instances, so Apply will handle them.', error=True)
             return
 
-        from Autodesk.Revit.DB import ElementId
         reports = []
         for gt_id, values in by_type_id.items():
+            # The real ElementId from the survey, never ElementId(int) — that
+            # round-trip resolved to the wrong element.
+            type_eid = self._survey.type_eid.get(gt_id)
+            if type_eid is None:
+                continue
             reports.append(regroup.rebuild_group_type(
-                self._doc, ElementId(gt_id), values,
+                self._doc, type_eid, values,
                 self._target(), self._group_by(), dry_run=dry_run))
+
+        if not reports:
+            self._status('Could not resolve the group types to rebuild. '
+                         'Press Analyse again.', error=True)
+            return
 
         self._report_rebuild(reports, dry_run)
 
@@ -660,21 +669,48 @@ class GroupParamDialog(object):
         for r in reports:
             rows.append([
                 r.group_type, str(r.instances), str(r.written),
-                str(r.restored), str(r.unmatched),
+                '{} / {}'.format(r.members_before, r.members_after),
+                str(r.preserved), str(r.restored), str(r.rekeyed),
+                str(len(r.lost)),
                 'CLEAN' if r.ok else 'PROBLEM',
                 'rolled back' if r.rolled_back else 'committed',
             ])
         out.print_table(
             table_data=rows,
             columns=['Group type', 'Instances', 'Values set',
-                     'Per-instance values restored', 'Unmatched members',
+                     'Members before / after', 'Data preserved',
+                     'Data restored', 'Re-keyed', 'Data LOST',
                      'Verdict', 'Outcome'])
+
+        out.print_md(
+            '*Data preserved* means a per-instance value survived the swap '
+            'untouched — if that column is high and *Data LOST* is zero, '
+            '`ChangeTypeId` is keeping your per-instance data and nothing needs '
+            'repairing. *Re-keyed* means the value still exists in the group but '
+            'on a member that moved slightly, which is harmless.')
 
         problems = [(r.group_type, msg) for r in reports for msg in r.problems]
         if problems:
             out.print_md('## Problems — these caused a rollback')
             for gt, msg in problems:
-                out.print_md('- **{}**: {}'.format(gt, msg))
+                out.print_md('- **{}**: {}'.format(gt or '(unnamed)', msg))
+
+        lost = [(r.group_type, n, v) for r in reports for n, v in r.lost]
+        if lost:
+            out.print_md('## Per-instance data that would be LOST')
+            out.print_md('This is the only category that genuinely matters — '
+                         'these values existed before and are gone afterwards.')
+            out.print_table(
+                table_data=[[gt or '(unnamed)', n, v] for gt, n, v in lost[:100]],
+                columns=['Group type', 'Parameter', 'Value that would be lost'])
+            if len(lost) > 100:
+                out.print_md('_{} more not listed._'.format(len(lost) - 100))
+
+        warnings = [(r.group_type, msg) for r in reports for msg in r.warnings]
+        if warnings:
+            out.print_md('## Warnings — cosmetic, did NOT cause a rollback')
+            for gt, msg in warnings:
+                out.print_md('- **{}**: {}'.format(gt or '(unnamed)', msg))
 
         failed = [(r.group_type, n, why)
                   for r in reports for n, why in r.restore_failed]
@@ -687,15 +723,18 @@ class GroupParamDialog(object):
                 table_data=[[gt, n, why] for gt, n, why in failed[:100]],
                 columns=['Group type', 'Parameter', 'Reason'])
 
-        unmatched = sum(r.unmatched for r in reports)
-        if unmatched:
-            out.print_md('## Unmatched members')
+        mismatch = [r for r in reports if r.members_before != r.members_after]
+        if mismatch:
+            out.print_md('## Member count changed')
             out.print_md(
-                '{} member(s) could not be matched to their pre-rebuild '
-                'counterpart, so their per-instance values could not be '
-                'restored. This is why the run was rolled back — restoring '
-                'onto the wrong element would be worse than not restoring at '
-                'all.'.format(unmatched))
+                'These group types ended up with a different number of members '
+                'than they started with, which means the rebuild did not '
+                'reproduce the group faithfully. Rolled back.')
+            out.print_table(
+                table_data=[[r.group_type or '(unnamed)',
+                             str(r.members_before), str(r.members_after)]
+                            for r in mismatch],
+                columns=['Group type', 'Members before', 'Members after'])
 
         if dry_run:
             if clean:

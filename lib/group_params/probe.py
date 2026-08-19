@@ -515,6 +515,10 @@ class GroupSurvey(object):
         self.instances_per_type = {}   # group type id int -> instance count
         self.type_name = {}            # group type id int -> name
         self.member_group = {}         # element id int -> group type id int
+        # The real ElementId, kept because reconstructing one from an int via
+        # ElementId(int) is not reliable across Revit versions and silently
+        # resolved to the wrong element.
+        self.type_eid = {}             # group type id int -> ElementId
 
     def group_type_of(self, element):
         return self.member_group.get(eid_int(element.Id))
@@ -552,11 +556,22 @@ def survey_groups(doc):
         survey.instances_per_type[gt_id] = survey.instances_per_type.get(gt_id, 0) + 1
 
         if gt_id not in survey.type_name:
+            survey.type_eid[gt_id] = grp.GetTypeId()
+            name = None
             try:
                 gt = doc.GetElement(grp.GetTypeId())
-                survey.type_name[gt_id] = gt.Name if gt is not None else '<group>'
+                if gt is not None:
+                    name = gt.Name
             except Exception:
-                survey.type_name[gt_id] = '<group>'
+                name = None
+            if not name:
+                # GroupType.Name is empty in some cases; the instance's own name
+                # carries the group name and is a usable stand-in.
+                try:
+                    name = grp.Name
+                except Exception:
+                    name = None
+            survey.type_name[gt_id] = name or '<unnamed group>'
 
         try:
             for mid in grp.GetMemberIds():

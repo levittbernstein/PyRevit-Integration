@@ -131,6 +131,36 @@ def _members_of(doc, group):
     return out
 
 
+def _values_present(wanted, after, skip=None):
+    """
+    True when every value in *wanted* still exists somewhere in *after*.
+
+    Used to tell a member that was recreated slightly off its old position — so
+    its match key changed — from one whose data is genuinely gone. Without this
+    distinction a harmless re-key is indistinguishable from data loss, and the
+    run gets rolled back for nothing.
+    """
+    pool = {}
+    for vals in after.values():
+        for name, value in vals.items():
+            pool.setdefault(name, set()).add(value)
+
+    for name, value in wanted.items():
+        if name == skip:
+            continue
+        if value not in pool.get(name, ()):
+            return False
+    return True
+
+
+def _member_at(doc, group, key):
+    """The member of *group* whose match key is *key*, or None."""
+    for idx, el in _members_of(doc, group):
+        if _match_key(doc, el, idx) == key:
+            return el
+    return None
+
+
 def snapshot_instance(doc, group, param_names):
     """{match_key: {param_name: value}} for one group instance."""
     data = {}
@@ -177,14 +207,31 @@ class RebuildReport(object):
         self.written         = 0
         self.restored        = 0
         self.restore_failed  = []   # (param, reason)
-        self.unmatched       = 0
-        self.problems        = []
+        self.members_before  = 0
+        self.members_after   = 0
+        self.preserved       = 0    # per-instance values that survived untouched
+        self.rekeyed         = 0    # value present but on a differently-keyed member
+        self.lost            = []   # (param, old_value) genuinely gone
+        self.problems        = []   # cause a rollback
+        self.warnings        = []   # do NOT cause a rollback
         self.committed       = False
         self.rolled_back     = False
 
     @property
     def ok(self):
-        return not self.problems and self.unmatched == 0
+        """
+        Whether this rebuild is safe to keep.
+
+        Judged on DATA, not on bookkeeping: real loss of per-instance values, a
+        change in member count, or a refused restore. A cosmetic failure such as
+        not being able to reinstate the group type's name is a warning — losing
+        the values because of it would be a far worse outcome than a group called
+        "Group 12".
+        """
+        return (not self.problems
+                and not self.lost
+                and not self.restore_failed
+                and self.members_before == self.members_after)
 
 
 def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
@@ -239,6 +286,7 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             snapshots[probe.eid_int(g.Id)] = snapshot_instance(doc, g, param_names)
 
         victim = instances[0]
+        victim_id = probe.eid_int(victim.Id)
         others = instances[1:]
         other_ids = [g.Id for g in others]
 
@@ -293,25 +341,55 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
 
         doc.Regenerate()
 
-        # 6. Restore per-instance values that the swap would otherwise have lost.
-        all_now = [new_group] + [doc.GetElement(gid) for gid in other_ids]
-        for g in all_now:
-            if g is None:
-                continue
-            before = snapshots.get(probe.eid_int(g.Id))
-            if not before:
-                continue
-            for idx, el in _members_of(doc, g):
-                key = _match_key(doc, el, idx)
-                vals = before.get(key)
-                if vals is None:
-                    report.unmatched += 1
+        # 6. Compare per-instance data against the snapshot and repair only what
+        #    actually changed.
+        #
+        #    Written as a comparison rather than "assume the swap destroyed
+        #    everything and restore blindly": ChangeTypeId may well preserve
+        #    members, in which case there is nothing to repair, and a restore
+        #    driven by key-matching alone reports catastrophic loss that never
+        #    happened. Measure first.
+        #
+        #    new_group carries a NEW ElementId, so its snapshot has to be looked
+        #    up under the id of the instance that was ungrouped, not its own.
+        pairs = [(new_group, victim_id)]
+        for gid in other_ids:
+            g = doc.GetElement(gid)
+            if g is not None:
+                pairs.append((g, probe.eid_int(gid)))
+
+        for g, snapshot_key in pairs:
+            before = snapshots.get(snapshot_key) or {}
+            after = snapshot_instance(doc, g, param_names)
+
+            report.members_before += len(before)
+            report.members_after += len(after)
+
+            for key, wanted in before.items():
+                current = after.get(key)
+
+                if current is None:
+                    # No member at that key. The data may simply have re-keyed
+                    # (member recreated a hair off), so look for it anywhere in
+                    # this instance before calling it lost.
+                    if _values_present(wanted, after, skip=target):
+                        report.rekeyed += 1
+                    else:
+                        for name, value in wanted.items():
+                            if name != target:
+                                report.lost.append((name, value))
                     continue
-                for name, value in vals.items():
+
+                for name, value in wanted.items():
                     if name == target:
-                        continue          # deliberately changed
-                    if probe.read_value(el, name) == value:
-                        continue          # already correct
+                        continue                   # deliberately changed
+                    if current.get(name) == value:
+                        report.preserved += 1
+                        continue
+                    el = _member_at(doc, g, key)
+                    if el is None:
+                        report.lost.append((name, value))
+                        continue
                     ok, reason = probe.set_value(el, name, value)
                     if ok:
                         report.restored += 1
@@ -319,15 +397,21 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
                         report.restore_failed.append((name, reason))
 
         # 7. Reclaim the original name so the model reads as before.
+        #    Cosmetic only — a failure here must NOT discard a good rebuild.
         try:
             doc.Delete(group_type_id)
+        except Exception as exc:
+            report.warnings.append(
+                'Could not delete the superseded group type: {}'.format(
+                    probe._short(exc)))
+        try:
             new_type = doc.GetElement(new_type_id)
             if new_type is not None and old_name:
                 new_type.Name = old_name
         except Exception as exc:
-            report.problems.append(
-                'Could not restore the group type name: {}'.format(
-                    probe._short(exc)))
+            report.warnings.append(
+                'Group type kept its generated name instead of "{}" ({}). '
+                'Cosmetic only.'.format(old_name, probe._short(exc)))
 
         # Force validation now so a refusal is caught here rather than silently
         # at commit — Set() reports success on group members regardless.
