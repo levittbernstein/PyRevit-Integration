@@ -59,6 +59,11 @@ _SPECIAL_RESTORE = [
 
 _TOL = 4  # decimal places when rounding a location point into a match key
 
+# Movement beyond this counts as displaced. Revit works in feet internally;
+# 0.001 ft is about 0.3 mm, below anything that matters but above float noise.
+_MOVE_TOL_FT = 0.001
+_FT_TO_MM = 304.8
+
 
 # ── Which parameters vary ─────────────────────────────────────────────────────
 
@@ -215,6 +220,51 @@ def _values_present(wanted, after, skip=None):
     return True
 
 
+def _displacements(matched):
+    """
+    Per-member displacement for every pair where both ends have a location.
+
+    Returns (deltas, unverifiable) where deltas is a list of (dx, dy, dz).
+    """
+    deltas = []
+    unverifiable = 0
+    for old_rec, new_rec in matched:
+        a, b = old_rec['pt'], new_rec['pt']
+        if a is None or b is None:
+            unverifiable += 1
+            continue
+        deltas.append((b[0] - a[0], b[1] - a[1], b[2] - a[2]))
+    return deltas, unverifiable
+
+
+def _uniform_delta(deltas):
+    """
+    The common displacement if every member moved identically, else None.
+
+    A uniform shift is a pure origin offset and can be undone by moving the
+    instance back. A non-uniform one means rotation, mirroring or distortion,
+    which cannot be corrected by translation — so it must fail rather than be
+    papered over.
+    """
+    if not deltas:
+        return None
+    dx, dy, dz = deltas[0]
+    for ox, oy, oz in deltas[1:]:
+        if (abs(ox - dx) > _MOVE_TOL_FT or abs(oy - dy) > _MOVE_TOL_FT
+                or abs(oz - dz) > _MOVE_TOL_FT):
+            return None
+    return (dx, dy, dz)
+
+
+def _max_move_mm(deltas):
+    worst = 0.0
+    for dx, dy, dz in deltas:
+        d = (dx * dx + dy * dy + dz * dz) ** 0.5
+        if d > worst:
+            worst = d
+    return worst * _FT_TO_MM
+
+
 def _member_at(doc, group, key):
     """The member of *group* whose match key is *key*, or None."""
     for idx, el in _members_of(doc, group):
@@ -306,6 +356,15 @@ class RebuildReport(object):
         self.restore_failed  = []   # (param, reason)
         self.members_before  = 0
         self.members_after   = 0
+        # Geometry checks. NewGroup picks its own origin for the new type, and
+        # ChangeTypeId then places each swapped instance's members relative to
+        # THAT origin — so instances shift by the delta between old and new
+        # origins, and rotated or mirrored ones distort. Verifying parameters
+        # without verifying position let exactly that reach a real model.
+        self.moved           = 0    # members still out of place at the end
+        self.corrected       = 0    # instances shifted back into place
+        self.unverifiable    = 0    # members with no location to compare
+        self.max_move_mm     = 0.0
         self.preserved       = 0    # per-instance values that survived untouched
         self.rekeyed         = 0    # value present but on a differently-keyed member
         self.lost            = []   # (param, old_value) genuinely gone
@@ -328,7 +387,8 @@ class RebuildReport(object):
         return (not self.problems
                 and not self.lost
                 and not self.restore_failed
-                and self.members_before == self.members_after)
+                and self.members_before == self.members_after
+                and self.moved == 0)
 
 
 def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
@@ -474,6 +534,46 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             report.members_after += len(after)
 
             matched, unmatched = _match_records(before, after)
+
+            # ── Geometry first ────────────────────────────────────────────────
+            # Checked before values, because a group in the wrong place is a
+            # worse outcome than a wrong parameter and must abort the run.
+            deltas, unver = _displacements(matched)
+            report.unverifiable += unver
+
+            delta = _uniform_delta(deltas)
+            worst = _max_move_mm(deltas)
+
+            if delta is not None and worst > 0.0:
+                # A pure origin offset. Shift the instance back and re-measure.
+                try:
+                    from Autodesk.Revit.DB import XYZ, ElementTransformUtils
+                    ElementTransformUtils.MoveElement(
+                        doc, g.Id, XYZ(-delta[0], -delta[1], -delta[2]))
+                    doc.Regenerate()
+                    after = member_records(doc, g, param_names)
+                    matched, unmatched = _match_records(before, after)
+                    deltas, _u = _displacements(matched)
+                    worst = _max_move_mm(deltas)
+                    report.corrected += 1
+                except Exception as exc:
+                    report.problems.append(
+                        'Could not correct the position of an instance: {}'
+                        .format(probe._short(exc)))
+
+            if worst > report.max_move_mm:
+                report.max_move_mm = worst
+
+            if worst > _MOVE_TOL_FT * _FT_TO_MM:
+                displaced = sum(1 for d in deltas
+                                if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) ** 0.5
+                                > _MOVE_TOL_FT)
+                report.moved += displaced
+                if delta is None:
+                    report.problems.append(
+                        'An instance is rotated, mirrored or distorted after the '
+                        'swap — members moved by differing amounts (worst {:.1f} '
+                        'mm), which a translation cannot undo.'.format(worst))
 
             for old_rec, new_rec in matched:
                 el = new_rec['el']

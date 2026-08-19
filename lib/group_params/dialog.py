@@ -231,6 +231,11 @@ class GroupParamDialog(object):
         if bic is None:
             return False
 
+        # Any clean verdict was measured against the previous state of the model,
+        # so it can no longer authorise a real rebuild. Requiring a fresh dry run
+        # is the point of the gate.
+        self._dry_run_clean = False
+
         try:
             self._elements = probe.collect_elements(self._doc, bic)
             self._survey = probe.survey_groups(self._doc)
@@ -765,7 +770,6 @@ class GroupParamDialog(object):
         out = script.get_output()
 
         clean = all(r.ok for r in reports) and bool(reports)
-        self._dry_run_clean = clean if dry_run else False
 
         out.print_md('# Rebuild group types — {}'.format(
             'DRY RUN (everything rolled back)' if dry_run else 'APPLIED'))
@@ -780,8 +784,10 @@ class GroupParamDialog(object):
             rows.append([
                 r.group_type, str(r.instances), str(r.written),
                 '{} / {}'.format(r.members_before, r.members_after),
-                str(r.preserved), str(r.restored), str(r.rekeyed),
-                str(len(r.lost)),
+                str(r.preserved), str(r.restored), str(len(r.lost)),
+                str(r.moved),
+                '{:.1f}'.format(r.max_move_mm) if r.max_move_mm else '-',
+                str(r.corrected),
                 'CLEAN' if r.ok else 'PROBLEM',
                 'rolled back' if r.rolled_back else 'committed',
             ])
@@ -789,15 +795,37 @@ class GroupParamDialog(object):
             table_data=rows,
             columns=['Group type', 'Instances', 'Values set',
                      'Members before / after', 'Data preserved',
-                     'Data restored', 'Re-keyed', 'Data LOST',
+                     'Data restored', 'Data LOST',
+                     'Members MOVED', 'Worst move (mm)', 'Positions corrected',
                      'Verdict', 'Outcome'])
 
         out.print_md(
             '*Data preserved* means a per-instance value survived the swap '
-            'untouched — if that column is high and *Data LOST* is zero, '
-            '`ChangeTypeId` is keeping your per-instance data and nothing needs '
-            'repairing. *Re-keyed* means the value still exists in the group but '
-            'on a member that moved slightly, which is harmless.')
+            'untouched. **Members MOVED is the column that matters most**: '
+            '`NewGroup` chooses its own origin for the new type, so swapped '
+            'instances can shift or rotate. *Positions corrected* counts '
+            'instances shifted back after a uniform offset; a rotation or mirror '
+            'cannot be corrected by translation and fails the run.')
+
+        moved = [r for r in reports if r.moved]
+        if moved:
+            out.print_md('## Instances left in the WRONG PLACE')
+            out.print_md(
+                'These group types could not be put back where they belong, so '
+                'they were rolled back. This is the failure mode that matters '
+                'more than any parameter value — a group in the wrong position '
+                'or orientation is worse than one with an out-of-date number.')
+            out.print_table(
+                table_data=[[r.group_type or '(unnamed)', str(r.moved),
+                             '{:.1f}'.format(r.max_move_mm)]
+                            for r in moved],
+                columns=['Group type', 'Members displaced', 'Worst move (mm)'])
+
+        unver = sum(r.unverifiable for r in reports)
+        if unver:
+            out.print_md(
+                '_{} member(s) have no location point, so their position could '
+                'not be verified either way._'.format(unver))
 
         # Each group type is its own transaction, so a failure in one does not
         # discard the others. That preserves progress, but it means a run can
@@ -887,6 +915,12 @@ class GroupParamDialog(object):
         except Exception:
             pass
         self._refresh_model_state(typed)
+
+        # Set AFTER the refresh: _refresh_model_state clears the flag, since a
+        # verdict measured against an older state must not authorise a real run.
+        # This verdict was measured against the state the refresh just re-read,
+        # so it is the one that counts.
+        self._dry_run_clean = clean if dry_run else False
 
         if dry_run:
             if clean:

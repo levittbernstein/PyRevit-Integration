@@ -385,6 +385,30 @@ makes position a stable key — with the index within the group as a fallback fo
 members that have no location. If matching is incomplete the run is rolled back
 rather than restoring values onto the wrong elements.
 
+### Rebuild: the geometry hazard
+
+`doc.Create.NewGroup()` gives the new group type **an origin Revit chooses** —
+there is no way to specify it. `ChangeTypeId` then places each swapped instance's
+members relative to that new origin, so **every swapped instance shifts by the
+delta between the old and new origins**, and rotated or mirrored instances
+distort.
+
+This reached a real model because verification checked member counts and
+parameter values but never position. Worse, the ordinal-fallback in member
+matching *masked* it: members that had moved still matched by ordinal, so making
+matching more forgiving hid the very error it should have exposed.
+
+The rebuild therefore now measures displacement for every matched member:
+
+- **Uniform displacement** is a pure origin offset, and the instance is moved
+  back with `ElementTransformUtils.MoveElement`, then re-measured.
+- **Non-uniform displacement** means rotation, mirroring or distortion. A
+  translation cannot undo it, so the run fails and rolls back.
+- Any residual movement above ~0.3 mm blocks the commit.
+
+**A group in the wrong place is a worse outcome than a stale parameter value.**
+Geometry is checked before values for that reason.
+
 ### Rebuild safety
 
 - The whole rebuild runs in **one transaction** and is rolled back unless
