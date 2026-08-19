@@ -246,7 +246,7 @@ def probe_vary_capability(doc, binding):
     return binding
 
 
-def make_failure_capture(rollback_on_error=True):
+def make_failure_capture(rollback_on_error=True, resolve_errors=False):
     """
     A failure preprocessor that records Revit's failures instead of showing them.
 
@@ -265,6 +265,7 @@ def make_failure_capture(rollback_on_error=True):
         def __init__(self):
             self.messages = []
             self.had_error = False
+            self.resolved = []
 
         def PreprocessFailures(self, accessor):
             errors = []
@@ -288,11 +289,26 @@ def make_failure_capture(rollback_on_error=True):
                     except Exception:
                         pass
 
+            if errors and resolve_errors:
+                # Applies Revit's own default resolution, which for "Can't keep
+                # elements joined" means UNJOINING geometry. A real model change,
+                # so this path is opt-in only and never the default.
+                for failure in errors:
+                    try:
+                        accessor.ResolveFailure(failure)
+                        self.resolved.append(
+                            failure.GetDescriptionText())
+                    except Exception:
+                        pass
+                return FailureProcessingResult.ProceedWithCommit
+
             if errors and rollback_on_error:
                 return FailureProcessingResult.ProceedWithRollBack
             return FailureProcessingResult.Continue
 
-    return _Capture()
+    capture = _Capture()
+    capture.resolved = []
+    return capture
 
 
 def _install_capture(transaction, capture):

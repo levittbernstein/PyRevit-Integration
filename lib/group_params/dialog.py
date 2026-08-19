@@ -711,7 +711,8 @@ class GroupParamDialog(object):
                 continue
             reports.append(regroup.rebuild_group_type(
                 self._doc, type_eid, values,
-                self._target(), self._group_by(), dry_run=dry_run))
+                self._target(), self._group_by(), dry_run=dry_run,
+                auto_resolve=self._auto_resolve()))
 
         if not reports:
             self._status('Could not resolve the group types to rebuild. '
@@ -719,6 +720,45 @@ class GroupParamDialog(object):
             return
 
         self._report_rebuild(reports, dry_run)
+
+        # Finish the job. The rebuild only covers elements inside multi-instance
+        # group types; ungrouped elements and those in single-instance groups
+        # need an ordinary write, and expecting the user to notice that and press
+        # a second button was simply a gap in the tool.
+        if not dry_run:
+            self._apply_remaining()
+
+    def _apply_remaining(self):
+        """Write the elements that did not need a group rebuild."""
+        p = self._plan          # refreshed by _report_rebuild
+        if p is None or not p.to_write:
+            return
+
+        writable = [(el, v, k) for el, v, k in p.to_write
+                    if self._survey.instance_count_for(el) <= 1]
+        if not writable:
+            return
+
+        subset = gapply.Plan()
+        subset.to_write = writable
+        subset.needs_vary = p.needs_vary
+
+        report = gapply.apply(
+            self._doc, subset, self._target(), self._binding, self._survey,
+            enable_vary=self._enable_vary(), restore_vary=self._restore_vary())
+
+        self._refresh_model_state(
+            dict((row.key, row.value) for row in self._rows))
+
+        current = self._win.FindName('StatusText')
+        prefix = current.Text if current is not None else ''
+        if report['error'] and not report['committed']:
+            self._status('{}  Ungrouped elements FAILED: {}'.format(
+                prefix, report['error']), error=True)
+        else:
+            self._status('{}  Plus {} element(s) written directly (ungrouped or '
+                         'in single-instance groups).'.format(
+                             prefix, report['written']))
 
     def _report_rebuild(self, reports, dry_run):
         from pyrevit import script
@@ -759,11 +799,43 @@ class GroupParamDialog(object):
             'repairing. *Re-keyed* means the value still exists in the group but '
             'on a member that moved slightly, which is harmless.')
 
+        # Each group type is its own transaction, so a failure in one does not
+        # discard the others. That preserves progress, but it means a run can
+        # legitimately be part-applied — which is confusing unless said plainly.
+        if not dry_run:
+            done = [r for r in reports if r.committed]
+            failed = [r for r in reports if not r.committed]
+            out.print_md('## What was and was not changed')
+            out.print_md(
+                '**{} of {} group type(s) were committed.** Each group type is '
+                'rebuilt in its own transaction, so the ones that succeeded are '
+                'saved and the ones that failed changed nothing.'.format(
+                    len(done), len(reports)))
+            if failed:
+                out.print_md('These group types still hold their OLD values and '
+                             'need attention:')
+                out.print_table(
+                    table_data=[[r.group_type or '(unnamed)',
+                                 str(r.instances),
+                                 '; '.join(r.problems) or 'unknown']
+                                for r in failed],
+                    columns=['Group type', 'Instances', 'Why it failed'])
+
         problems = [(r.group_type, msg) for r in reports for msg in r.problems]
         if problems:
             out.print_md('## Problems — these caused a rollback')
             for gt, msg in problems:
                 out.print_md('- **{}**: {}'.format(gt or '(unnamed)', msg))
+            if any('joined' in msg.lower() for _gt, msg in problems):
+                out.print_md(
+                    '> **"Can\'t keep elements joined"** means that group '
+                    'contains elements joined to geometry outside it, so Revit '
+                    'will not regroup them as they are. Resolving it requires '
+                    '**unjoining** those elements, which is a real change to '
+                    'your model — so it is not done automatically. Tick '
+                    '*"Let Revit resolve errors"* under OPTIONS and run the dry '
+                    'run again to see what that would do, or handle that group '
+                    'manually in Edit Group mode.')
 
         lost = [(r.group_type, n, v) for r in reports for n, v in r.lost]
         if lost:
@@ -855,6 +927,10 @@ class GroupParamDialog(object):
 
     def _restore_vary(self):
         cb = self._win.FindName('RestoreVaryCb')
+        return bool(cb.IsChecked) if cb is not None else False
+
+    def _auto_resolve(self):
+        cb = self._win.FindName('AutoResolveCb')
         return bool(cb.IsChecked) if cb is not None else False
 
     # ── Public ────────────────────────────────────────────────────────────────

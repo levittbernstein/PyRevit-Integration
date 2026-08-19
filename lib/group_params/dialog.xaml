@@ -191,6 +191,9 @@
           <CheckBox x:Name="RestoreVaryCb" IsChecked="False" FontSize="13"
                     Margin="0,8,0,0"
                     Content="Switch it back off afterwards — WARNING: Revit then aligns values across group instances, which can overwrite per-instance values"/>
+          <CheckBox x:Name="AutoResolveCb" IsChecked="False" FontSize="13"
+                    Margin="0,8,0,0"
+                    Content="Let Revit resolve errors during a rebuild — WARNING: for &quot;Can't keep elements joined&quot; this UNJOINS geometry. Try a dry run with it on first."/>
         </StackPanel>
       </Border>
     </StackPanel>

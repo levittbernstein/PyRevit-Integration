@@ -277,7 +277,7 @@ def snapshot_instance(doc, group, param_names):
 
 # ── Failure handling ──────────────────────────────────────────────────────────
 
-def _install_capture(transaction):
+def _install_capture(transaction, auto_resolve=False):
     """
     Dismiss the warnings a rebuild legitimately raises; roll back on errors.
 
@@ -289,7 +289,8 @@ def _install_capture(transaction):
 
     Returns the capture object so its messages can be reported.
     """
-    capture = probe.make_failure_capture(rollback_on_error=True)
+    capture = probe.make_failure_capture(
+        rollback_on_error=not auto_resolve, resolve_errors=auto_resolve)
     probe._install_capture(transaction, capture)
     return capture
 
@@ -331,7 +332,7 @@ class RebuildReport(object):
 
 
 def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
-                       dry_run=True):
+                       dry_run=True, auto_resolve=False):
     """
     Rebuild one group type with new *target* values.
 
@@ -351,7 +352,7 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
     capture = None
     try:
         t.Start()
-        capture = _install_capture(t)
+        capture = _install_capture(t, auto_resolve=auto_resolve)
 
         old_type = doc.GetElement(group_type_id)
         if old_type is None:
@@ -529,9 +530,15 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
                     probe._short(exc)))
 
         if capture is not None and capture.had_error:
-            report.problems.append(
-                'Revit raised an error during the rebuild: {}'.format(
-                    capture.messages[0] if capture.messages else 'unknown'))
+            if auto_resolve and capture.resolved:
+                report.warnings.append(
+                    'Revit resolved {} error(s) by its own default action, which '
+                    'can include unjoining geometry: {}'.format(
+                        len(capture.resolved), capture.resolved[0]))
+            else:
+                report.problems.append(
+                    'Revit raised an error during the rebuild: {}'.format(
+                        capture.messages[0] if capture.messages else 'unknown'))
 
         # 8. Commit only if this is a real run AND nothing went wrong.
         if dry_run or not report.ok:
