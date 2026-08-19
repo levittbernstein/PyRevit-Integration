@@ -398,13 +398,24 @@ parameter values but never position. Worse, the ordinal-fallback in member
 matching *masked* it: members that had moved still matched by ordinal, so making
 matching more forgiving hid the very error it should have exposed.
 
-The rebuild therefore now measures displacement for every matched member:
+The rebuild therefore measures displacement for every matched member, and
+**refuses rather than compensating**:
 
-- **Uniform displacement** is a pure origin offset, and the instance is moved
-  back with `ElementTransformUtils.MoveElement`, then re-measured.
-- **Non-uniform displacement** means rotation, mirroring or distortion. A
-  translation cannot undo it, so the run fails and rolls back.
-- Any residual movement above ~0.3 mm blocks the commit.
+- Any movement above ~0.3 mm rolls that group type back, unchanged.
+- A **uniform** displacement is reported as an *origin offset* — the geometry is
+  intact, the new type simply carries a different origin.
+- A **non-uniform** one is reported as *rotated / mirrored*.
+
+**Do not "fix" this by moving the instances back.** It is tempting, because the
+displacement is a single constant vector and `ElementTransformUtils.MoveElement`
+undoes it exactly. But the swap has *already* displaced the members by then, and
+Revit may drop host relationships, joins and constraints during that intermediate
+state — moving back does not restore them. Elements hosted by group members from
+*outside* the group are precisely what breaks. Net-zero displacement is not
+net-zero damage.
+
+So the tool reports which group types are safe to rebuild (origins happen to
+match) and which are not, and the unsafe ones go on the manual worksheet.
 
 **A group in the wrong place is a worse outcome than a stale parameter value.**
 Geometry is checked before values for that reason.

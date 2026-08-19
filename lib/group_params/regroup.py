@@ -361,10 +361,14 @@ class RebuildReport(object):
         # THAT origin — so instances shift by the delta between old and new
         # origins, and rotated or mirrored ones distort. Verifying parameters
         # without verifying position let exactly that reach a real model.
-        self.moved           = 0    # members still out of place at the end
-        self.corrected       = 0    # instances shifted back into place
+        self.moved           = 0    # members that would end up out of place
         self.unverifiable    = 0    # members with no location to compare
         self.max_move_mm     = 0.0
+        # Set when the displacement is a pure origin offset — the whole instance
+        # shifted by one constant vector, geometry otherwise intact. Reported
+        # because it tells the user this is an origin mismatch and not a mangled
+        # group, but it still blocks the rebuild.
+        self.uniform_offset_mm = 0.0
         self.preserved       = 0    # per-instance values that survived untouched
         self.rekeyed         = 0    # value present but on a differently-keyed member
         self.lost            = []   # (param, old_value) genuinely gone
@@ -544,36 +548,44 @@ def rebuild_group_type(doc, group_type_id, values_by_key, target, group_by,
             delta = _uniform_delta(deltas)
             worst = _max_move_mm(deltas)
 
-            if delta is not None and worst > 0.0:
-                # A pure origin offset. Shift the instance back and re-measure.
-                try:
-                    from Autodesk.Revit.DB import XYZ, ElementTransformUtils
-                    ElementTransformUtils.MoveElement(
-                        doc, g.Id, XYZ(-delta[0], -delta[1], -delta[2]))
-                    doc.Regenerate()
-                    after = member_records(doc, g, param_names)
-                    matched, unmatched = _match_records(before, after)
-                    deltas, _u = _displacements(matched)
-                    worst = _max_move_mm(deltas)
-                    report.corrected += 1
-                except Exception as exc:
-                    report.problems.append(
-                        'Could not correct the position of an instance: {}'
-                        .format(probe._short(exc)))
-
             if worst > report.max_move_mm:
                 report.max_move_mm = worst
 
             if worst > _MOVE_TOL_FT * _FT_TO_MM:
+                # Deliberately NOT corrected by moving the instance back.
+                #
+                # A GroupType stores member positions relative to its origin.
+                # NewGroup picks its own origin, and there is no API to set one,
+                # so ChangeTypeId shifts every swapped instance by
+                # (old origin - new origin). The geometry is identical; only the
+                # origin differs.
+                #
+                # Moving the instance back afterwards would look like it undoes
+                # the shift, but the swap has already displaced the members, and
+                # Revit may drop host relationships, joins and constraints during
+                # that intermediate state — a move back does not restore them.
+                # Net-zero displacement is not net-zero damage, and elements
+                # hosted by group members from outside the group are exactly what
+                # breaks. So this refuses instead.
                 displaced = sum(1 for d in deltas
                                 if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) ** 0.5
                                 > _MOVE_TOL_FT)
                 report.moved += displaced
-                if delta is None:
+
+                if delta is not None:
+                    report.uniform_offset_mm = worst
                     report.problems.append(
-                        'An instance is rotated, mirrored or distorted after the '
-                        'swap — members moved by differing amounts (worst {:.1f} '
-                        'mm), which a translation cannot undo.'.format(worst))
+                        'Rebuilding this group type would shift every instance by '
+                        '{:.1f} mm. The geometry is unchanged — the new group type '
+                        'just has a different origin, and Revit provides no way to '
+                        'set it. Refusing rather than moving the groups back, '
+                        'which would not restore hosting or joins broken in the '
+                        'meantime.'.format(worst))
+                else:
+                    report.problems.append(
+                        'Rebuilding this group type would rotate, mirror or '
+                        'distort instances — members move by differing amounts '
+                        '(worst {:.1f} mm). Refusing.'.format(worst))
 
             for old_rec, new_rec in matched:
                 el = new_rec['el']

@@ -787,7 +787,8 @@ class GroupParamDialog(object):
                 str(r.preserved), str(r.restored), str(len(r.lost)),
                 str(r.moved),
                 '{:.1f}'.format(r.max_move_mm) if r.max_move_mm else '-',
-                str(r.corrected),
+                'origin offset' if r.uniform_offset_mm else (
+                    'rotated/mirrored' if r.moved else '-'),
                 'CLEAN' if r.ok else 'PROBLEM',
                 'rolled back' if r.rolled_back else 'committed',
             ])
@@ -796,30 +797,47 @@ class GroupParamDialog(object):
             columns=['Group type', 'Instances', 'Values set',
                      'Members before / after', 'Data preserved',
                      'Data restored', 'Data LOST',
-                     'Members MOVED', 'Worst move (mm)', 'Positions corrected',
+                     'Members MOVED', 'Worst move (mm)', 'Kind of movement',
                      'Verdict', 'Outcome'])
 
         out.print_md(
-            '*Data preserved* means a per-instance value survived the swap '
-            'untouched. **Members MOVED is the column that matters most**: '
-            '`NewGroup` chooses its own origin for the new type, so swapped '
-            'instances can shift or rotate. *Positions corrected* counts '
-            'instances shifted back after a uniform offset; a rotation or mirror '
-            'cannot be corrected by translation and fails the run.')
+            '**Members MOVED is the column that matters most.** A `GroupType` '
+            'stores member positions relative to its origin, `NewGroup` picks a '
+            'new origin, and Revit provides no way to set one — so a rebuilt type '
+            'can shift every instance by `old origin - new origin`. Where that '
+            'happens the rebuild is **refused**, not compensated: moving the '
+            'groups back afterwards would not restore hosting, joins or '
+            'constraints broken while they were displaced.')
 
         moved = [r for r in reports if r.moved]
         if moved:
-            out.print_md('## Instances left in the WRONG PLACE')
+            out.print_md('## Group types that CANNOT be rebuilt safely')
             out.print_md(
-                'These group types could not be put back where they belong, so '
-                'they were rolled back. This is the failure mode that matters '
-                'more than any parameter value — a group in the wrong position '
-                'or orientation is worse than one with an out-of-date number.')
+                'Rebuilding these would move their instances, so they were '
+                'refused and are unchanged. Their geometry is fine — it is purely '
+                'that the new group type would carry a different origin. Do these '
+                'by hand in Edit Group mode using the worksheet in *Preview*.')
             out.print_table(
-                table_data=[[r.group_type or '(unnamed)', str(r.moved),
-                             '{:.1f}'.format(r.max_move_mm)]
+                table_data=[[r.group_type or '(unnamed)', str(r.instances),
+                             str(r.moved), '{:.1f}'.format(r.max_move_mm),
+                             'origin offset' if r.uniform_offset_mm
+                             else 'rotated / mirrored']
                             for r in moved],
-                columns=['Group type', 'Members displaced', 'Worst move (mm)'])
+                columns=['Group type', 'Instances', 'Members displaced',
+                         'Worst move (mm)', 'Cause'])
+
+        safe = [r for r in reports if not r.moved and r.ok]
+        if safe:
+            out.print_md('## Group types that ARE safe to rebuild')
+            out.print_md(
+                'These come out with every member in exactly its original '
+                'position — the new group type happens to take the same origin as '
+                'the old one.')
+            out.print_table(
+                table_data=[[r.group_type or '(unnamed)', str(r.instances),
+                             str(r.written), str(r.restored)] for r in safe],
+                columns=['Group type', 'Instances', 'Values set',
+                         'Per-instance values restored'])
 
         unver = sum(r.unverifiable for r in reports)
         if unver:
