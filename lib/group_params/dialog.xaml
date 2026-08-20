@@ -192,7 +192,10 @@
       <TextBlock Style="{StaticResource SectionHeader}" Text="OPTIONS"/>
       <Border Style="{StaticResource PanelBorder}" Padding="10,8">
         <StackPanel>
+          <CheckBox x:Name="OverwriteCb" IsChecked="True" FontSize="13"
+                    Content="Overwrite existing values — untick to only fill elements that are currently empty and leave any that already have a value"/>
           <CheckBox x:Name="EnableVaryCb" IsChecked="True" FontSize="13"
+                    Margin="0,8,0,0"
                     Content="Enable &quot;Values can vary by group instance&quot; if needed (this is what lets Revit write inside groups)"/>
           <CheckBox x:Name="RestoreVaryCb" IsChecked="False" FontSize="13"
                     Margin="0,8,0,0"

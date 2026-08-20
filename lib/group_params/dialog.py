@@ -99,6 +99,9 @@ class GroupParamDialog(object):
                 ctrl.Click += handler
             elif event == 'SelectionChanged':
                 ctrl.SelectionChanged += handler
+            elif event == 'Checked':
+                ctrl.Checked += handler
+                ctrl.Unchecked += handler
 
         hook('AnalyseBtn',    self._on_analyse)
         hook('FillBlanksBtn', self._on_fill_blanks)
@@ -112,6 +115,13 @@ class GroupParamDialog(object):
         hook('CloseBtn',       self._on_close)
         hook('GroupByCombo',  self._on_param_changed, 'SelectionChanged')
         hook('TargetCombo',   self._on_param_changed, 'SelectionChanged')
+        # Overwrite changes what gets written, so re-count when it toggles.
+        hook('OverwriteCb',   self._on_overwrite_changed, 'Checked')
+
+    def _on_overwrite_changed(self, sender, e):
+        if self._rows and self._binding is not None:
+            self._flush_values()
+            self._recount()
 
     # ── Selections ────────────────────────────────────────────────────────────
 
@@ -669,16 +679,25 @@ class GroupParamDialog(object):
         probe_ok = bool(self._write_probe and self._write_probe[0])
         self._plan = gapply.plan(self._doc, self._rows, self._target(),
                                  self._binding, self._survey,
-                                 grouped_write_ok=probe_ok)
+                                 grouped_write_ok=probe_ok,
+                                 overwrite=self._overwrite())
         p = self._plan
 
         if not p.to_write:
-            self._status('Nothing to write — every row is blank or already '
-                         'holds the value shown.')
+            if p.protected:
+                self._status('Nothing to write — {} element(s) already have a '
+                             'value and "Overwrite existing values" is off.'
+                             .format(p.protected))
+            else:
+                self._status('Nothing to write — every row is blank or already '
+                             'holds the value shown.')
             return
 
-        msg = '{} element(s) would be written, {} already correct.'.format(
+        msg = '{} element(s) would be written, {} already correct'.format(
             len(p.to_write) - len(p.blocked), p.unchanged)
+        if p.protected:
+            msg += ', {} kept (already set, overwrite off)'.format(p.protected)
+        msg += '.'
         if p.blocked:
             msg += (' {} cannot be written from outside a group — but they span '
                     'only {} group type(s), so Preview gives you a worksheet of '
@@ -719,6 +738,12 @@ class GroupParamDialog(object):
 
         out.print_md('# LB Set Parameter in Groups — preview')
         out.print_md('**Nothing has been written.**')
+
+        out.print_md(
+            '- To write: **{}**, already correct: **{}**{}'.format(
+                len(p.to_write) - len(p.blocked), p.unchanged,
+                (', kept because they already have a value and overwrite is '
+                 'off: **{}**'.format(p.protected)) if p.protected else ''))
 
         out.print_md('## Diagnosis')
         out.print_md(
@@ -1263,6 +1288,10 @@ class GroupParamDialog(object):
     def _restore_vary(self):
         cb = self._win.FindName('RestoreVaryCb')
         return bool(cb.IsChecked) if cb is not None else False
+
+    def _overwrite(self):
+        cb = self._win.FindName('OverwriteCb')
+        return bool(cb.IsChecked) if cb is not None else True
 
     def _auto_resolve(self):
         cb = self._win.FindName('AutoResolveCb')

@@ -81,7 +81,8 @@ def _natural(s):
 class Plan(object):
     def __init__(self):
         self.to_write       = []    # (element, value, row_key)
-        self.unchanged      = 0
+        self.unchanged      = 0     # already holds the target value
+        self.protected      = 0     # holds another value, kept (overwrite off)
         self.grouped        = 0
         self.single_inst    = 0     # grouped, but group type has one instance
         self.multi_inst     = 0     # grouped, group type has several instances
@@ -95,12 +96,18 @@ class Plan(object):
         self.blocked_by_type = {}   # group type name -> {row_key: value}
 
 
-def plan(doc, rows, target, binding, survey, grouped_write_ok=None):
+def plan(doc, rows, target, binding, survey, grouped_write_ok=None,
+         overwrite=True):
     """
     Work out what would be written and what cannot be.
 
     Nothing is modified. The predictions here are what the dialog shows, so they
     have to be honest about the blocked cases rather than optimistic.
+
+    overwrite=False leaves any element that already holds a non-empty value
+    untouched, writing only the empty ones. overwrite=True (the default) writes
+    every element whose value differs from the target. Either way an element
+    already holding the target value is a no-op and never rewritten.
     """
     p = Plan()
 
@@ -112,6 +119,10 @@ def plan(doc, rows, target, binding, survey, grouped_write_ok=None):
             current = row.current[idx] if idx < len(row.current) else None
             if current == row.value:
                 p.unchanged += 1
+                continue
+            if not overwrite and current not in (None, u''):
+                # Already has some other value, and we were told not to override.
+                p.protected += 1
                 continue
             p.to_write.append((el, row.value, row.key))
 
