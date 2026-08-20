@@ -1279,4 +1279,8 @@ class GroupParamDialog(object):
             'survey':       self._survey,
             'enable_vary':  self._enable_vary(),
             'restore_vary': self._restore_vary(),
+            # Without this, script.py's apply() runs with no keys and every
+            # key write is refused as "0 known" even though the dialog resolved
+            # them — the exact bug that made Apply write nothing.
+            'id_options':   self._id_options,
         }

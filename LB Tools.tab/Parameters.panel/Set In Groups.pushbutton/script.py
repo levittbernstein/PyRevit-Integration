@@ -137,7 +137,8 @@ else:
                     doc, plan, state['target'], state['binding'],
                     state['survey'],
                     enable_vary=state['enable_vary'],
-                    restore_vary=state['restore_vary'])
+                    restore_vary=state['restore_vary'],
+                    id_options=state.get('id_options'))
 
                 if report['error'] and not report['committed']:
                     forms.alert('Update failed:\n\n{}'.format(report['error']),
