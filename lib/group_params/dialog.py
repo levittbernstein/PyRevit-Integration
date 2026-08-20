@@ -59,6 +59,8 @@ class GroupParamDialog(object):
         self._plan     = None
         self._boxes    = {}   # row key -> TextBox
         self._id_options = {} # key name -> ElementId, for key parameters
+        self._key_matches = 0
+        self._key_missing = []
         self._write_probe = None   # (ok, reason) from a rolled-back real write
         # The real rebuild stays locked until a dry run has come back clean —
         # it rewrites group definitions, so it should never be the first thing
@@ -100,6 +102,7 @@ class GroupParamDialog(object):
         hook('AnalyseBtn',    self._on_analyse)
         hook('FillBlanksBtn', self._on_fill_blanks)
         hook('ClearAllBtn',   self._on_clear_all)
+        hook('MatchKeysBtn',  self._on_match_keys)
         hook('KeySchedBtn',   self._on_key_schedule)
         hook('PreviewBtn',     self._on_preview)
         hook('RebuildTestBtn', self._on_rebuild_dry)
@@ -291,6 +294,16 @@ class GroupParamDialog(object):
             except Exception:
                 self._id_options = {}
 
+        # When the target is a key parameter, the value to write IS a key name —
+        # and the key names normally match the group-by values, which is the
+        # whole point of keying off Name. So prefill them rather than making the
+        # user retype what the tool already knows. Nothing is written until
+        # Apply, so prefilling is safe.
+        self._key_matches = 0
+        self._key_missing = []
+        if self._id_options:
+            self._match_keys_to_rows(announce=False)
+
         self._binding = probe.find_binding(self._doc, target)
         probe.probe_vary_capability(self._doc, self._binding)
         self._probe_grouped_write()
@@ -322,9 +335,23 @@ class GroupParamDialog(object):
             return
 
         target = self._target()
+        current = probe.read_value(sample, target)
+
         # Must differ from the current value or the write is a no-op that Revit
         # would accept even where a genuine change is refused.
-        test_value = probe.distinct_test_value(probe.read_value(sample, target))
+        if self._id_options:
+            # For a key parameter the test value has to be a REAL key name.
+            # A numeric placeholder is rejected as "not a valid key", which
+            # would report the wrong reason and hide the group restriction.
+            test_value = None
+            for name in sorted(self._id_options):
+                if name != current:
+                    test_value = name
+                    break
+            if test_value is None:
+                return
+        else:
+            test_value = probe.distinct_test_value(current)
         self._write_probe = probe.probe_write(
             self._doc, sample, target, test_value,
             id_options=self._id_options)
@@ -430,6 +457,50 @@ class GroupParamDialog(object):
         self._flush_values()
         self._recount()
 
+    def _match_keys_to_rows(self, announce=True):
+        """
+        Point each row at the key whose name matches the row's group-by value.
+
+        e.g. every room named 1B2P gets the key called 1B2P. Rows with no
+        matching key are collected so the user is told which keys are missing
+        rather than left wondering why some rows stayed blank.
+        """
+        lookup = dict((name.strip().lower(), name)
+                      for name in self._id_options)
+
+        self._key_matches = 0
+        self._key_missing = []
+
+        for row in self._rows:
+            if not row.key:
+                continue
+            match = lookup.get(row.key.strip().lower())
+            if match is None:
+                self._key_missing.append(row.key)
+                continue
+            row.value = match
+            self._key_matches += 1
+            box = self._boxes.get(row.key)
+            if box is not None:
+                box.Text = match
+
+        if announce:
+            self._recount()
+            msg = 'Matched {} row(s) to a key of the same name.'.format(
+                self._key_matches)
+            if self._key_missing:
+                msg += ' No key exists for: {}.'.format(
+                    ', '.join(self._key_missing[:8]))
+            self._status(msg, error=bool(self._key_missing))
+
+    def _on_match_keys(self, sender, e):
+        if not self._id_options:
+            self._status('The selected parameter is not a key parameter — there '
+                         'are no keys to match against.', error=True)
+            return
+        self._flush_values()
+        self._match_keys_to_rows(announce=True)
+
     def _on_fill_blanks(self, sender, e):
         box = self._win.FindName('FillAllBox')
         value = u'{}'.format(box.Text).strip() if box is not None else u''
@@ -502,14 +573,20 @@ class GroupParamDialog(object):
         if self._id_options:
             t1 = self._win.FindName('DiagParamText')
             if t1 is not None:
-                t1.Text += (
-                    '  This is a KEY parameter with {} key(s) available: {}. '
-                    'Type a key name in the NEW column. Setting the key drives '
-                    'every field of its key schedule, so those values then live '
-                    'on the key rather than on each room — change them once '
-                    'there, with no grouped write at all.'.format(
-                        len(self._id_options),
-                        ', '.join(sorted(self._id_options)[:8])))
+                extra = (
+                    '  This is a KEY parameter with {} key(s) available. Rows '
+                    'have been matched to the key of the same name '
+                    '({} matched'.format(len(self._id_options),
+                                         self._key_matches))
+                if self._key_missing:
+                    extra += ', no key yet for: {}'.format(
+                        ', '.join(self._key_missing[:6]))
+                extra += (
+                    '). Press Apply to assign them. Once assigned, the key '
+                    'schedule fields live on the keys — which are not in any '
+                    'group — so changing those values later needs no grouped '
+                    'write at all.')
+                t1.Text += extra
 
         t3 = self._win.FindName('DiagGroupText')
         if t3 is not None:
