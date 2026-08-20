@@ -467,15 +467,49 @@ def _short(exc):
 
 # ── Writing ───────────────────────────────────────────────────────────────────
 
-def key_options(doc, category_bic=None):
+def key_name_of(element):
     """
-    {key name: ElementId} for every key-schedule key in the document.
+    The display name of a key-schedule key.
 
-    Key schedule entries are elements that live inside the key schedule view, so
-    they are collected by passing the view id to FilteredElementCollector.
+    Element.Name is not dependable here — on some key elements it throws or
+    returns nothing, and the key name is carried in a parameter instead. Tried in
+    order rather than assumed, because an empty name meant the key was dropped
+    and the tool then reported "0 known" for a schedule that was in fact
+    populated.
+    """
+    try:
+        name = element.Name
+        if name:
+            return name
+    except Exception:
+        pass
 
-    Needed because a key parameter has ElementId storage: setting it means
-    resolving a name like '1B2P' to the key element that carries it.
+    for candidate in ('Key Name', 'Name', 'Type Name'):
+        p = param_by_name(element, candidate)
+        if p is None:
+            continue
+        try:
+            value = p.AsString()
+            if value:
+                return value
+        except Exception:
+            pass
+        try:
+            value = p.AsValueString()
+            if value:
+                return value
+        except Exception:
+            pass
+    return None
+
+
+def key_schedules(doc, category_bic=None):
+    """
+    Key schedules in the document, with what each one yielded.
+
+    Returns a list of dicts: schedule, name, category_matches, elements, keys.
+    Separate from key_options() so the dialog can explain WHY no keys were found
+    instead of just reporting none.
     """
     from Autodesk.Revit.DB import FilteredElementCollector
     ViewSchedule = _dbtype('ViewSchedule')
@@ -484,10 +518,10 @@ def key_options(doc, category_bic=None):
     if category_bic is not None:
         try:
             wanted = int(category_bic)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             wanted = None
 
-    out = {}
+    found = []
     for vs in (FilteredElementCollector(doc)
                .OfClass(ViewSchedule)
                .ToElements()):
@@ -495,22 +529,57 @@ def key_options(doc, category_bic=None):
             definition = vs.Definition
             if not definition.IsKeySchedule:
                 continue
-            if wanted is not None:
-                if eid_int(definition.CategoryId) != wanted:
-                    continue
         except Exception:
             continue
 
+        matches = True
+        if wanted is not None:
+            try:
+                matches = (eid_int(definition.CategoryId) == wanted)
+            except Exception:
+                matches = True     # can't tell, so don't exclude it
+
+        keys = {}
+        elements = 0
         try:
             for key_el in FilteredElementCollector(doc, vs.Id).ToElements():
-                try:
-                    name = key_el.Name
-                except Exception:
-                    continue
+                elements += 1
+                name = key_name_of(key_el)
                 if name:
-                    out[name] = key_el.Id
+                    keys[name] = key_el.Id
         except Exception:
-            continue
+            pass
+
+        try:
+            label = vs.Name
+        except Exception:
+            label = '<schedule>'
+
+        found.append({'schedule': vs, 'name': label,
+                      'category_matches': matches,
+                      'elements': elements, 'keys': keys})
+
+    return found
+
+
+def key_options(doc, category_bic=None):
+    """
+    {key name: ElementId} for the key schedules of *category_bic*.
+
+    Falls back to every key schedule when the category filter matches nothing —
+    comparing a BuiltInCategory to a stored CategoryId is not reliable enough to
+    justify returning no keys because of it.
+    """
+    found = key_schedules(doc, category_bic)
+
+    out = {}
+    for info in found:
+        if info['category_matches']:
+            out.update(info['keys'])
+
+    if not out:
+        for info in found:
+            out.update(info['keys'])
 
     return out
 

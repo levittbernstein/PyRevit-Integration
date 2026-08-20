@@ -61,6 +61,7 @@ class GroupParamDialog(object):
         self._id_options = {} # key name -> ElementId, for key parameters
         self._key_matches = 0
         self._key_missing = []
+        self._key_diag = []   # what key_schedules() found, for diagnosis
         self._write_probe = None   # (ok, reason) from a rolled-back real write
         # The real rebuild stays locked until a dry run has come back clean —
         # it rewrites group definitions, so it should never be the first thing
@@ -285,12 +286,18 @@ class GroupParamDialog(object):
         # Key-schedule keys, for a target with ElementId storage. Setting a key
         # means resolving a name to the key element that carries it.
         self._id_options = {}
+        self._key_diag = []
         if self._target_is_elementid():
             try:
+                self._key_diag = probe.key_schedules(
+                    self._doc, self._selected_category())
                 self._id_options = probe.key_options(
                     self._doc, self._selected_category())
-            except Exception:
+            except Exception as exc:
                 self._id_options = {}
+                self._key_diag = [{'name': 'lookup failed: {}'.format(exc),
+                                   'category_matches': False,
+                                   'elements': 0, 'keys': {}}]
 
         # When the target is a key parameter, the value to write IS a key name —
         # and the key names normally match the group-by values, which is the
@@ -598,6 +605,31 @@ class GroupParamDialog(object):
                                 'attempted and Revit refused it: {}'
                                 .format(self._write_probe[1]))
                 t2.Foreground = Brushes.Firebrick
+
+        if self._target_is_elementid() and not self._id_options:
+            # An ElementId target with no resolvable keys writes nothing, so say
+            # exactly what was found rather than failing later with "0 known".
+            t1 = self._win.FindName('DiagParamText')
+            if t1 is not None:
+                if not self._key_diag:
+                    t1.Text += ('  This parameter expects a KEY, but no key '
+                                'schedule was found in this model. Use "Set up '
+                                'key schedule" first.')
+                else:
+                    parts = []
+                    for info in self._key_diag:
+                        parts.append('"{}" ({} row(s), {} usable name(s){})'
+                                     .format(info['name'], info['elements'],
+                                             len(info['keys']),
+                                             '' if info['category_matches']
+                                             else ', different category'))
+                    t1.Text += ('  This parameter expects a KEY, but none could '
+                                'be read. Key schedules found: {}. If a schedule '
+                                'has rows but no usable names, its key name is '
+                                'held somewhere this tool did not look — tell me '
+                                'what these numbers say.'.format('; '.join(parts)))
+            self._status('No usable keys found — see the diagnosis above. '
+                         'Nothing can be written until keys resolve.', error=True)
 
         if self._id_options:
             t1 = self._win.FindName('DiagParamText')
