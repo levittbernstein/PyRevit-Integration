@@ -25,7 +25,7 @@ from System.Windows import (
     FontWeights, TextTrimming,
 )
 from System.Windows.Controls import (
-    TextBlock, TextBox, Grid, ColumnDefinition, RowDefinition,
+    TextBlock, TextBox, ComboBox, Grid, ColumnDefinition, RowDefinition,
 )
 from System.Windows.Media import Brushes
 
@@ -270,9 +270,7 @@ class GroupParamDialog(object):
         for row in self._rows:
             if row.key in keep:
                 row.value = keep[row.key]
-                box = self._boxes.get(row.key)
-                if box is not None:
-                    box.Text = keep[row.key]
+                self._set_ctrl_value(self._boxes.get(row.key), keep[row.key])
         self._recount()
         return True
 
@@ -433,25 +431,58 @@ class GroupParamDialog(object):
             else:
                 label(row.existing, r, 3, brush=Brushes.Gray, size=12)
 
-            box = TextBox()
-            box.Text = row.value or u''
-            box.FontSize = 13
-            box.Height = 23
-            box.Margin = Thickness(3, 2, 4, 2)
-            box.VerticalContentAlignment = VerticalAlignment.Center
-            box.BorderBrush = Brushes.Gainsboro
-            box.TextChanged += self._on_value_typed
+            if self._id_options:
+                # A key parameter accepts only the existing key names, so offer
+                # them rather than making the user retype a name that has to
+                # match exactly. Blank means "leave this row alone".
+                box = ComboBox()
+                box.FontSize = 13
+                box.Height = 23
+                box.Margin = Thickness(3, 2, 4, 2)
+                box.Items.Add(u'')
+                for name in sorted(self._id_options):
+                    box.Items.Add(name)
+                box.SelectedItem = row.value if row.value in self._id_options \
+                    else u''
+                box.SelectionChanged += self._on_value_typed
+            else:
+                box = TextBox()
+                box.Text = row.value or u''
+                box.FontSize = 13
+                box.Height = 23
+                box.Margin = Thickness(3, 2, 4, 2)
+                box.VerticalContentAlignment = VerticalAlignment.Center
+                box.BorderBrush = Brushes.Gainsboro
+                box.TextChanged += self._on_value_typed
+
             Grid.SetRow(box, r)
             Grid.SetColumn(box, 4)
             container.Children.Add(box)
             self._boxes[row.key] = box
 
+    @staticmethod
+    def _ctrl_value(ctrl):
+        """Current value of a row control, which may be a TextBox or ComboBox."""
+        if ctrl is None:
+            return u''
+        if isinstance(ctrl, ComboBox):
+            item = ctrl.SelectedItem
+            return u'' if item is None else u'{}'.format(item).strip()
+        return u'{}'.format(ctrl.Text).strip()
+
+    @staticmethod
+    def _set_ctrl_value(ctrl, value):
+        if ctrl is None:
+            return
+        if isinstance(ctrl, ComboBox):
+            ctrl.SelectedItem = value or u''
+        else:
+            ctrl.Text = value or u''
+
     def _flush_values(self):
-        """Copy typed values back onto the rows before using them."""
+        """Copy the chosen values back onto the rows before using them."""
         for row in self._rows:
-            box = self._boxes.get(row.key)
-            if box is not None:
-                row.value = u'{}'.format(box.Text).strip()
+            row.value = self._ctrl_value(self._boxes.get(row.key))
 
     def _on_value_typed(self, sender, e):
         self._flush_values()
@@ -480,9 +511,7 @@ class GroupParamDialog(object):
                 continue
             row.value = match
             self._key_matches += 1
-            box = self._boxes.get(row.key)
-            if box is not None:
-                box.Text = match
+            self._set_ctrl_value(self._boxes.get(row.key), match)
 
         if announce:
             self._recount()
@@ -510,8 +539,8 @@ class GroupParamDialog(object):
         n = 0
         for row in self._rows:
             b = self._boxes.get(row.key)
-            if b is not None and not u'{}'.format(b.Text).strip():
-                b.Text = value
+            if b is not None and not self._ctrl_value(b):
+                self._set_ctrl_value(b, value)
                 n += 1
         self._flush_values()
         self._recount()
@@ -519,7 +548,7 @@ class GroupParamDialog(object):
 
     def _on_clear_all(self, sender, e):
         for b in self._boxes.values():
-            b.Text = u''
+            self._set_ctrl_value(b, u'')
         self._flush_values()
         self._recount()
         self._status('Cleared every row — nothing would be written.')
@@ -979,13 +1008,13 @@ class GroupParamDialog(object):
 
         current = self._win.FindName('StatusText')
         prefix = current.Text if current is not None else ''
-        if report['error'] and not report['committed']:
-            self._status('{}  Ungrouped elements FAILED: {}'.format(
-                prefix, report['error']), error=True)
-        else:
+        if report['written']:
             self._status('{}  Plus {} element(s) written directly (ungrouped or '
                          'in single-instance groups).'.format(
                              prefix, report['written']))
+        else:
+            self._status('{}  No ungrouped elements were written: {}'.format(
+                prefix, report['error'] or 'nothing left to write'), error=True)
 
     def _report_rebuild(self, reports, dry_run):
         from pyrevit import script

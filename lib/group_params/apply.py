@@ -179,10 +179,21 @@ def plan(doc, rows, target, binding, survey, grouped_write_ok=None):
 def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
           restore_vary=False, id_options=None):
     """
-    Write the planned values in a single transaction.
+    Write the planned values, in TWO transactions.
 
-    Returns a report dict. Per-element refusals are collected rather than raised,
-    so one awkward element cannot abort the whole run.
+    Split deliberately. Revit enforces the group restriction at COMMIT, and the
+    failure handler has to roll the transaction back — so a single grouped
+    element in the batch discards every other write with it, including all the
+    valid ungrouped ones. Writing everything in one transaction meant one
+    refused room could produce "nothing was written at all".
+
+    So elements that cannot be in a multi-instance group go first, on their own,
+    and are safe from anything the risky ones do. The risky ones follow in a
+    second transaction whose failure costs nothing already earned.
+
+    This also means the tool no longer depends on predicting correctly which
+    writes Revit will allow — a wrong prediction now costs one wasted
+    transaction instead of the whole run.
     """
     from Autodesk.Revit.DB import Transaction, TransactionStatus
 
@@ -201,6 +212,64 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
         report['error'] = 'Nothing to write.'
         return report
 
+    # Split by risk, not by prediction. Anything in a group type with several
+    # instances might be refused at commit; everything else will not be.
+    safe, risky = [], []
+    for item in plan_obj.to_write:
+        el = item[0]
+        if survey.instance_count_for(el) > 1:
+            risky.append(item)
+        else:
+            safe.append(item)
+
+    # Phase 1 — the writes that cannot be refused for group reasons.
+    if safe:
+        _write_batch(doc, safe, target, binding, survey, report,
+                     id_options=id_options,
+                     enable_vary=(plan_obj.needs_vary and enable_vary),
+                     restore_vary=restore_vary,
+                     label='LB - Set Parameter (ungrouped)')
+
+    # Phase 2 — the ones Revit may refuse. Separate transaction, so a refusal
+    # here cannot undo phase 1.
+    if risky:
+        risky_report = dict(report)
+        risky_report['written'] = 0
+        risky_report['failed'] = []
+        risky_report['error'] = None
+        risky_report['committed'] = False
+
+        _write_batch(doc, risky, target, binding, survey, risky_report,
+                     id_options=id_options, enable_vary=False,
+                     restore_vary=False,
+                     label='LB - Set Parameter (in groups)')
+
+        if risky_report['committed']:
+            report['written'] += risky_report['written']
+            report['failed'].extend(risky_report['failed'])
+        else:
+            report['skipped'] += len(risky)
+            report['blocked_note'] = (
+                '{} element(s) inside multi-instance group types were refused '
+                'by Revit and rolled back on their own, leaving the {} '
+                'ungrouped write(s) intact. {}'.format(
+                    len(risky), report['written'],
+                    risky_report['error'] or ''))
+
+    report['committed'] = report['written'] > 0 or not plan_obj.to_write
+    return report
+
+
+def _write_batch(doc, items, target, binding, survey, report,
+                 id_options=None, enable_vary=False, restore_vary=False,
+                 label='LB - Set Parameter'):
+    """
+    Write one batch in its own transaction, updating *report* in place.
+
+    Kept separate so each batch's success or failure is independent.
+    """
+    from Autodesk.Revit.DB import Transaction, TransactionStatus
+
     original_varies = bool(binding.varies)
 
     # Capture Revit's failures rather than letting them raise a modal dialog.
@@ -208,13 +277,13 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
     # value through would ungroup their model — so it must never appear.
     capture = probe.make_failure_capture(rollback_on_error=True)
 
-    t = Transaction(doc, 'LB - Set Parameter in Groups')
+    t = Transaction(doc, label)
+    written_here = 0
     try:
         t.Start()
         probe._install_capture(t, capture)
 
-        # Step 2: lift the group restriction if we can and need to.
-        if plan_obj.needs_vary and enable_vary and binding.can_enable:
+        if enable_vary and binding.can_enable and binding.definition is not None:
             try:
                 binding.definition.SetAllowVaryBetweenGroups(doc, True)
                 report['vary_enabled'] = True
@@ -223,19 +292,11 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
                     'Could not enable vary-by-group on "{}": {}'.format(
                         target, probe._short(exc)))
 
-        # Already known to be refused, verified by probe. Attempting them anyway
-        # would bury the real failures under a hundred identical ones.
-        blocked_ids = set(probe.eid_int(el.Id) for el, _k, _r in plan_obj.blocked)
-
-        for el, value, key in plan_obj.to_write:
-            if probe.eid_int(el.Id) in blocked_ids:
-                report['skipped'] += 1
-                continue
-
+        for el, value, key in items:
             ok, reason = probe.set_value(el, target, value,
                                         id_options=id_options)
             if ok:
-                report['written'] += 1
+                written_here += 1
             else:
                 extra = u''
                 if survey.is_grouped(el):
@@ -245,10 +306,8 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
                 report['failed'].append(
                     (probe.eid_int(el.Id), key, (reason or 'refused') + extra))
 
-        # Optionally put the project setting back. Off by default: switching it
-        # back to "aligned per group type" makes Revit align values across group
-        # instances, which can overwrite per-instance values that other elements
-        # legitimately held.
+        # Off by default: switching back to "aligned per group type" makes Revit
+        # align values across group instances, overwriting per-instance values.
         if report['vary_enabled'] and restore_vary and not original_varies:
             try:
                 changed = binding.definition.SetAllowVaryBetweenGroups(doc, False)
@@ -261,22 +320,19 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
                 pass
 
         # Commit() returns a status; it does not raise when Revit rejects the
-        # changes. Trusting it blindly is what made the tool report 130 values
-        # written when none of them persisted.
+        # changes. Trusting it blindly once made the tool report 130 values
+        # written when none persisted.
         status = t.Commit()
-        report['committed'] = (status == TransactionStatus.Committed)
-
-        if not report['committed']:
+        if status == TransactionStatus.Committed:
+            report['written'] += written_here
+            report['committed'] = True
+        else:
             detail = capture.messages[0] if capture.messages else (
                 'Revit rejected the changes at commit time.')
             report['error'] = (
-                'NOTHING WAS SAVED. Revit rejected the changes and rolled them '
-                'back: {}\n\n'
+                'This batch was rejected and rolled back: {} '
                 'Parameter.Set() reports success on a grouped element, but the '
-                'restriction is enforced at commit. Use "Rebuild: dry run" '
-                'instead — it rewrites the group definitions properly.'
-                .format(detail))
-            report['written'] = 0        # nothing persisted, so claim nothing
+                'restriction is enforced at commit.'.format(detail))
             report['vary_enabled'] = False
             report['vary_restored'] = False
 
@@ -287,7 +343,7 @@ def apply(doc, plan_obj, target, binding, survey, enable_vary=True,
         except Exception:
             pass
         report['error'] = (
-            'The update failed and was rolled back, so the model is unchanged: '
-            '{}'.format(probe._short(exc)))
+            'This batch failed and was rolled back: {}'.format(
+                probe._short(exc)))
 
     return report

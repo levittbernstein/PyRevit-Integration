@@ -149,6 +149,8 @@ else:
                         'Written:  {}'.format(report['written']),
                         'Failed:   {}'.format(len(report['failed'])),
                     ]
+                    if report.get('blocked_note'):
+                        out += ['', report['blocked_note']]
                     if report['skipped']:
                         out += [
                             'Skipped:  {} (blocked inside multi-instance '
