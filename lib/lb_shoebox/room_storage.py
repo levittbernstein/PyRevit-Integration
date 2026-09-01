@@ -42,10 +42,24 @@ def _get_schema():
 
 
 def read_room_state(room):
-    """Saved state dict stored on the room, or None. No transaction needed."""
+    """Saved state dict stored on the room, or None. No transaction needed.
+
+    Lookup-only: if the schema doesn't exist yet (nothing saved on any room in
+    this model), we do NOT build it. Building on read would register an empty,
+    unused schema that then shows under Purge Unused > Extensible Storage
+    Schemas. The schema is created only in write_room_state(), where it
+    immediately holds an entity, so it is never "unused". A model that already
+    has room data carries the schema (persisted with the entity), so
+    Schema.Lookup finds it here without rebuilding.
+    """
     try:
+        global _schema_cache
+        from Autodesk.Revit.DB.ExtensibleStorage import Schema
         import System as _Sys
-        schema = _get_schema()
+        schema = Schema.Lookup(_Sys.Guid(_SCHEMA_GUID))
+        if schema is None:
+            return None  # never saved — and we avoided creating the schema
+        _schema_cache = schema
         entity = room.GetEntity(schema)
         if entity is None or not entity.IsValid():
             return None
