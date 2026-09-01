@@ -36,6 +36,11 @@ from pyrevit import revit, DB, forms, script
 # The sheet parameter the titleblock's first-issue label is bound to.
 PARAM_NAME = "Sheet Issue Date"
 
+# What to write when a sheet has no revisions yet (not issued). A dash reads
+# cleanly on a printed titleblock, where "null" would look like an error.
+# Change to "TBC", "Not issued", "" (blank), etc. to taste.
+UNISSUED_TEXT = "-"
+
 doc = revit.doc
 output = script.get_output()
 
@@ -62,7 +67,7 @@ else:
 
     to_write = []        # (sheet, new_value)
     unchanged = 0
-    no_revision = 0
+    unissued = 0         # sheets with no revisions — get UNISSUED_TEXT
     missing_param = []   # sheet numbers with no such parameter
     not_writable = []    # sheet numbers where the param is read-only / not text
 
@@ -72,8 +77,8 @@ else:
 
         date_str = _first_revision_date(sheet)
         if date_str is None:
-            no_revision += 1
-            continue
+            date_str = UNISSUED_TEXT      # not issued yet
+            unissued += 1
 
         p = sheet.LookupParameter(PARAM_NAME)
         if p is None:
@@ -104,7 +109,7 @@ else:
         summary = [
             "Sheets to update:   {}".format(len(to_write)),
             "Already correct:    {}".format(unchanged),
-            "No revisions yet:   {}".format(no_revision),
+            'Not issued (set to "{}"):   {}'.format(UNISSUED_TEXT, unissued),
         ]
         if missing_param:
             summary.append('Missing "{}":  {}'.format(PARAM_NAME, len(missing_param)))
@@ -138,7 +143,7 @@ else:
                 out = ["**First Issue Date — done**", "",
                        "- Updated: **{}**".format(written),
                        "- Already correct: {}".format(unchanged),
-                       "- No revisions yet: {}".format(no_revision)]
+                       '- Not issued (set to "{}"): {}'.format(UNISSUED_TEXT, unissued)]
                 if missing_param:
                     out.append('- Missing "{}": {} ({})'.format(
                         PARAM_NAME, len(missing_param), ", ".join(missing_param)))
