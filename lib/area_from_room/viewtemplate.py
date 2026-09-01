@@ -164,6 +164,37 @@ def _copy_link_graphics(doc, gsrc, view, dst, report):
         report.warn('Linked model {}'.format(e))
 
 
+def _copy_custom_view_params(src, tpl):
+    """Copy custom (non-built-in) project parameter values from one view/template
+    to another — e.g. the "View Type" browser-organisation parameter. Built-in
+    parameters (name, scale, V/G, …) are left to CreateViewTemplate."""
+    from Autodesk.Revit.DB import BuiltInParameter, StorageType
+    for p in src.Parameters:
+        try:
+            if p.Definition.BuiltInParameter != BuiltInParameter.INVALID:
+                continue
+            if not p.HasValue:
+                continue
+            name = p.Definition.Name
+        except Exception:
+            continue
+        tp = tpl.LookupParameter(name)
+        if tp is None or tp.IsReadOnly or tp.StorageType != p.StorageType:
+            continue
+        try:
+            st = p.StorageType
+            if st == StorageType.String:
+                tp.Set(p.AsString() or '')
+            elif st == StorageType.Integer:
+                tp.Set(p.AsInteger())
+            elif st == StorageType.Double:
+                tp.Set(p.AsDouble())
+            elif st == StorageType.ElementId:
+                tp.Set(p.AsElementId())
+        except Exception:
+            pass
+
+
 def _graphics_source(doc, src):
     """Where to read the floor plan's graphics from: its applied view template
     (the real store for a templated view — link display included), else the
@@ -195,7 +226,7 @@ def _unique_view_name(doc, base):
     return name
 
 
-def apply_look(doc, src, dst, report):
+def apply_look(doc, src, dst, report, suffix='_Area Plan'):
     gsrc = _graphics_source(doc, src)
     try:
         _copy_category_graphics(doc, gsrc, dst)
@@ -210,7 +241,7 @@ def apply_look(doc, src, dst, report):
     except Exception as ex:
         report.warn('Linked model graphics skipped: {}'.format(ex))
 
-    target_name = _template_base_name(doc, src) + '_Area Plan'
+    target_name = _template_base_name(doc, src) + suffix
 
     # Mint a reusable area-plan template from the (now matching) view.
     # View.CreateViewTemplate() exists in Revit 2020+.
@@ -224,6 +255,9 @@ def apply_look(doc, src, dst, report):
         tpl = dst.CreateViewTemplate()
         tpl.Name = _unique_view_name(doc, target_name)
         dst.ViewTemplateId = tpl.Id
+        # Carry the old template's custom parameters (e.g. "View Type") across —
+        # CreateViewTemplate copies graphics but not project-parameter values.
+        _copy_custom_view_params(gsrc, tpl)
         report.note('Created + applied view template "{}".'.format(tpl.Name))
     except Exception as ex:
         report.warn('View template creation failed ({}); graphic look was still '

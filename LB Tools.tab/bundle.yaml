@@ -1,0 +1,12 @@
+# Panel order for the LB Tools tab (left -> right).
+# Applies identically on every machine because it ships in the repo.
+# Any panel not listed is appended after these.
+layout:
+  - Doors
+  - Environmental
+  - Hatch Tools
+  - Keynotes
+  - Model Audit
+  - Parameters
+  - Sheets
+  - Areas
