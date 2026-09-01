@@ -11,6 +11,7 @@ A growing suite of Revit automation tools for Levitt Bernstein, delivered as a s
 | Export Register | Issue Register | Exports a formatted Deliverables List & Issue Sheet (Excel + PDF) |
 | Keynote Manager | Keynotes | Renumber, reorder and categorise keynotes, then sync to the keynote file and all model references |
 | Set In Groups | Parameters | Set a parameter across many elements bucketed by another parameter, including elements inside model groups |
+| Area Plan From Rooms | Areas | Convert a floor plan into an Area Plan that mirrors its rooms — boundaries, parameter data, colour scheme, view template, tags and key schedules |
 
 ---
 
@@ -499,6 +500,50 @@ Autodesk have logged the gap as REVIT-99372.
 
 ---
 
+## Area Plan From Rooms — detail
+
+### What it does
+
+Converts a room-bearing floor plan into an **Area Plan** that mirrors the rooms:
+
+- draws area boundary lines from each room's boundary segments (de-duplicated so
+  a shared wall gives one line);
+- places, names and numbers an area per room, copying every matching
+  shared-parameter value;
+- copies the view settings (crop, scope box, view range, scale, detail level,
+  phase) and view-specific annotation;
+- replicates the room colour scheme as an area colour scheme, matched by the
+  scheme's parameter;
+- builds a matching **area-plan view template** (`<template>_Area Plan`),
+  carrying category/filter overrides and linked-model display — halftone forced
+  on for links shown *By Linked View*;
+- tags areas (with a user-chosen tag family) where the room was tagged;
+- replicates room key schedules as area key schedules (Rooms→Areas naming),
+  bridging built-in key columns such as Occupancy to `Occupancy_Areas`.
+
+Re-runnable and idempotent: it reuses an existing `… Area Plan`, de-duplicates
+boundaries and areas, and only re-does the one-time graphic setup when the view
+is first created.
+
+### Manual steps it can't do (and reports)
+
+Two things the Revit API forbids, so the tool prints plain-language steps and
+asks the user to do them once, then re-run:
+
+1. **Colour scheme** — a "by Name" area colour scheme must be created once in the
+   UI (see the API note below).
+2. **Non-shared project parameters** — must be ticked onto the Areas category in
+   *Manage → Project Parameters* (see the API note below).
+
+### Structure
+
+`lib/area_from_room/` holds one module per concern (`boundaries`, `areas`,
+`params`, `viewsettings`, `annotations`, `colorscheme`, `viewtemplate`,
+`keyschedule`, `tagging`, `bindings`, `param_bridge`, `report`); the pushbutton
+`script.py` orchestrates them inside one `TransactionGroup`.
+
+---
+
 ## Developer notes — IronPython gotchas
 
 pyRevit runs `script.py` and any modules it imports under IronPython. This
@@ -705,3 +750,77 @@ hands it to `worker.py` (the CPython entry point), and reads back success/failur
 
 Never import CPython-only packages directly in `script.py` or any lib module —
 they will fail silently or with confusing errors under IronPython.
+
+---
+
+## Developer notes — Revit API gotchas (from Area Plan From Rooms)
+
+Hard-won constraints discovered building the Area→Rooms tool. Most are "you
+can't do X the obvious way" limits with a non-obvious workaround.
+
+### ❌ `ColorFillScheme` can't be created from scratch, and its parameter is fixed
+
+There is no constructor/factory for a colour fill scheme — the only way to make
+one is `existingScheme.Duplicate(name)`, and the copy keeps the **same category
+and parameter** as its source. So to colour areas "by Name" you must duplicate
+an **area** scheme that already colours by Name (find candidates with
+`OfClass(ColorFillScheme)`, filtered by `CategoryId == OST_Areas` and
+`AreaSchemeId`). `ColorFillScheme.ParameterDefinition` is **read-only** — you
+cannot change which parameter a scheme colours by. If no suitable scheme exists,
+the user has to create one once in the UI (Annotate → Colour Fill → Colour Fill
+Legend → New scheme). Entries are then written with `SetEntries` /
+`AddEntry` / `UpdateEntry` (`SetEntries(GetEntries())` alone is a no-op).
+
+### ❌ Non-shared project parameters can't be rebound to new categories
+
+`BindingMap.ReInsert` only accepts **shared** parameters. A non-shared *project*
+parameter (created in the project, not from a shared-parameter file) cannot have
+a category added via the API — even though *Manage → Project Parameters* lets you
+do it by hand. So: rebind shared params in code, and for non-shared ones either
+list them for the user to tick **Areas** manually, or create a parallel shared
+`<name>_Areas` parameter and copy the values. **Built-in** parameters (e.g.
+`Occupancy`) can't be rebound at all — not even in the UI — so the
+`<name>_Areas` bridge is the only route for those.
+
+### ⚠️ A linked model's halftone can't be *read* via the API — only set
+
+`view.GetElementOverrides(linkId).Halftone` **always returns `false`** for RVT
+Links, even when the link is halftoned in the *Revit Links* tab. You can still
+*apply* it (`OverrideGraphicSettings().SetHalftone(True)` +
+`view.SetElementOverrides`), so replication means deciding *when* to force it —
+this tool forces halftone on for links shown *By Linked View*. The display mode
+itself (`RevitLinkGraphicsSettings` via `Get/SetLinkOverrides`) can be stored on
+the link **instance or type**, and on a templated view it lives on the
+**template**, not the view — so read from the template first, at both id levels.
+
+### ❌ `LinkVisibilityType` is not importable from `Autodesk.Revit.DB`
+
+`from Autodesk.Revit.DB import LinkVisibilityType` throws *"Cannot import
+name"* and aborts the script. Compare the enum by its string instead:
+`str(settings.LinkVisibilityType) == 'ByLinkView'`.
+
+### ⚠️ A new shared-parameter file needs a header; restore the app's afterwards
+
+`Application.OpenSharedParameterFile()` returns null / throws on a **0-byte**
+file. When creating a temp shared-parameter file, write the `*META / *GROUP /
+*PARAM` header first. Use your **own** temp file (never the office one), and
+restore `Application.SharedParametersFilename` in a `finally` so you don't leave
+the app pointed at your temp file.
+
+### ⚠️ Area schemes can't be created; view templates can
+
+`AreaScheme` has no create method — the target scheme (e.g. "NIA") must already
+exist; enumerate with `OfClass(AreaScheme)`. But `View.CreateViewTemplate()`
+**does** exist (Revit 2020+): configure a view, then create the template *from
+that view* so it is the right type — a floor-plan template can't be assigned to
+an area plan.
+
+### ⚠️ Key-schedule keys: enumerate view-scoped, create by row insertion
+
+The key rows of a key schedule are enumerated with a **view-scoped collector**
+— `FilteredElementCollector(doc, keyScheduleView.Id)` — **not** by category.
+Create a new key by inserting a row into the schedule body
+(`GetTableData().GetSectionData(SectionType.Body).InsertRow(...)`) and capture
+the new element via a before/after diff of that collector. Columns are added by
+matching `ScheduleDefinition.GetSchedulableFields()` names — a column can only
+exist if its parameter is bound to the schedule's category.
