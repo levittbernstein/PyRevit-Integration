@@ -162,7 +162,7 @@ else:
                             'you may need to re-enter them next time.'.format(ex))
 
             # ── Summary "textbox" ──────────────────────────────────────────
-            out = ['# Sheet Level Codes', '',
+            out = ['# Autofill Level', '',
                    '- Updated: **{}**'.format(written),
                    '- Already correct: {}'.format(unchanged),
                    '- Flagged (left blank): **{}**'.format(len(flagged))]
