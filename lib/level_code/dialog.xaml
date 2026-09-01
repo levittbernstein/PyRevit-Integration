@@ -1,0 +1,96 @@
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="Sheet Level Codes"
+    Width="560" Height="720"
+    MinWidth="440" MinHeight="420"
+    WindowStartupLocation="CenterScreen"
+    ResizeMode="CanResizeWithGrip"
+    Background="#F4F4F4"
+    FontFamily="Founders Grotesk Regular, Arial"
+    FontSize="14">
+
+  <Window.Resources>
+
+    <Style x:Key="SectionHeader" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Founders Grotesk Medium, Arial"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="Background" Value="#111111"/>
+      <Setter Property="Padding" Value="10,6"/>
+    </Style>
+
+    <Style x:Key="MetaLabel" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="12"/>
+      <Setter Property="Foreground" Value="#666666"/>
+      <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="PanelBorder" TargetType="Border">
+      <Setter Property="BorderBrush" Value="#CCCCCC"/>
+      <Setter Property="BorderThickness" Value="1"/>
+      <Setter Property="Background" Value="White"/>
+    </Style>
+
+    <Style x:Key="ActionButton" TargetType="Button">
+      <Setter Property="Height" Value="34"/>
+      <Setter Property="MinWidth" Value="110"/>
+      <Setter Property="FontSize" Value="13"/>
+      <Setter Property="Background" Value="#111111"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Margin" Value="6,0,0,0"/>
+    </Style>
+
+    <Style x:Key="CancelButton" TargetType="Button" BasedOn="{StaticResource ActionButton}">
+      <Setter Property="Background" Value="#666666"/>
+    </Style>
+
+  </Window.Resources>
+
+  <Grid Margin="16">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/>   <!-- header + instructions -->
+      <RowDefinition Height="*"/>      <!-- levels table -->
+      <RowDefinition Height="Auto"/>   <!-- meta line -->
+      <RowDefinition Height="Auto"/>   <!-- status + actions -->
+    </Grid.RowDefinitions>
+
+    <StackPanel Grid.Row="0" Margin="0,0,0,12">
+      <TextBlock Style="{StaticResource SectionHeader}" Text="LEVEL CODES"/>
+      <Border Style="{StaticResource PanelBorder}" Padding="10,8">
+        <TextBlock TextWrapping="Wrap" Foreground="#333333"
+                   Text="Set the BIM level code for each level: 00 ground, 01/02… above, 99/98… below ground. Codes below are guessed from the level names — please check them. A blank level flags any sheet that uses it. Your codes are saved in the model for next time."/>
+      </Border>
+    </StackPanel>
+
+    <Border Grid.Row="1" Style="{StaticResource PanelBorder}">
+      <ScrollViewer VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
+        <Grid x:Name="RowContainer" Margin="10,8"/>
+      </ScrollViewer>
+    </Border>
+
+    <TextBlock Grid.Row="2" Style="{StaticResource MetaLabel}" Margin="2,8,0,0"
+               Text="Writes the &quot;Level&quot; parameter on all sheets. Sections, elevations and 3D views count as ZZ; schedules/drafting views as XX; legends are ignored."/>
+
+    <Grid Grid.Row="3" Margin="0,10,0,0">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="*"/>
+        <ColumnDefinition Width="Auto"/>
+      </Grid.ColumnDefinitions>
+      <TextBlock x:Name="StatusText" Grid.Column="0" VerticalAlignment="Center"
+                 Foreground="#333333" TextWrapping="Wrap"/>
+      <StackPanel Grid.Column="1" Orientation="Horizontal"
+                  HorizontalAlignment="Right">
+        <Button x:Name="RunBtn" Style="{StaticResource ActionButton}"
+                Content="Run"/>
+        <Button x:Name="CancelBtn" Style="{StaticResource CancelButton}"
+                Content="Cancel"/>
+      </StackPanel>
+    </Grid>
+
+  </Grid>
+</Window>
