@@ -64,20 +64,29 @@ def copy_view_settings(src, dst, report):
             dst.CropBox = src.CropBox
         except Exception:
             pass
-        _copy_nonrect_crop(src, dst)
-        # A plan view ignores rotation set through CropBox.Transform, so if the
-        # source crop is rotated, rotate the destination crop element to match.
+
         try:
             angle = _crop_angle(src.CropBox.Transform)
-            if abs(angle) > 1.0e-6:
+        except Exception:
+            angle = 0.0
+
+        if abs(angle) > 1.0e-6:
+            # Rotated rectangular crop: a plan view ignores rotation set through
+            # CropBox.Transform, so rotate the crop ELEMENT to match. Do NOT also
+            # copy the crop shape — that boundary is already rotated, so copying
+            # it here and rotating the element would skew the boundary twice
+            # while the content only rotates once.
+            try:
                 dst.Document.Regenerate()
-                if _rotate_crop(dst, angle):
+                if _match_rotated_crop(dst, src.CropBox, angle):
                     report.note('Matched the view\'s rotated crop.')
                 else:
                     report.warn('The source crop is rotated but the rotation '
                                 'could not be applied — rotate the crop by hand.')
-        except Exception:
-            pass
+            except Exception:
+                pass
+        else:
+            _copy_nonrect_crop(src, dst)
 
 
 def _iv(eid):
@@ -90,19 +99,12 @@ def _crop_angle(transform):
     return math.atan2(bx.Y, bx.X)
 
 
-def _rotate_crop(view, angle):
-    """Rotate a plan view's crop region by `angle` (radians). Finds the crop
-    element via the visibility-toggle trick, then RotateElement about its
-    centre. Returns True on success."""
-    from Autodesk.Revit.DB import (
-        SubTransaction, FilteredElementCollector, Line, XYZ,
-        ElementTransformUtils,
-    )
+def _find_crop_element(view):
+    """The view's crop region element, via the visibility-toggle trick (collect
+    visible ids with the crop hidden, then shown; the difference is the crop).
+    Done in a rolled-back sub-transaction so visibility is left untouched."""
+    from Autodesk.Revit.DB import SubTransaction, FilteredElementCollector
     doc = view.Document
-
-    # Identify the crop element: collect visible ids with the crop hidden, then
-    # shown; the difference is the crop element. Do it in a rolled-back
-    # sub-transaction so the visibility state is left untouched.
     crop_id = None
     sub = SubTransaction(doc)
     try:
@@ -123,18 +125,51 @@ def _rotate_crop(view, angle):
             sub.RollBack()
         except Exception:
             pass
-        return False
+        return None
+    return crop_id
 
-    if crop_id is None:
-        return False
+
+def _cropbox_centre(cropbox):
+    """World centre of a BoundingBoxXYZ (its transform IS respected on read for
+    position — only rotation is dropped by ViewPlan on write)."""
+    return cropbox.Transform.OfPoint(
+        cropbox.Min.Add(cropbox.Max).Multiply(0.5))
+
+
+def _match_rotated_crop(view, src_cropbox, angle):
+    """Make the view's crop match a rotated source crop.
+
+    ViewPlan drops rotation on CropBox assignment but keeps position, so:
+      * read the destination crop's current centre (c0) from view.CropBox;
+      * rotate the crop element about c0 (orientation only — centre stays at c0);
+      * translate the crop so c0 moves onto the source crop's true centre.
+    No reliance on the crop element's bounding box (which comes back empty)."""
+    from Autodesk.Revit.DB import Line, XYZ, ElementTransformUtils
+    doc = view.Document
+
+    target = _cropbox_centre(src_cropbox)          # where the crop should sit
     try:
-        bbox = view.CropBox
-        centre = bbox.Transform.OfPoint(bbox.Min.Add(bbox.Max).Multiply(0.5))
-        axis = Line.CreateBound(centre, centre.Add(XYZ.BasisZ))
-        ElementTransformUtils.RotateElement(doc, crop_id, axis, angle)
-        return True
+        c0 = _cropbox_centre(view.CropBox)         # where it sits now
     except Exception:
         return False
+
+    crop_id = _find_crop_element(view)
+    if crop_id is None:
+        return False
+
+    try:
+        axis = Line.CreateBound(c0, c0.Add(XYZ.BasisZ))
+        ElementTransformUtils.RotateElement(doc, crop_id, axis, angle)
+    except Exception:
+        return False
+
+    delta = XYZ(target.X - c0.X, target.Y - c0.Y, 0.0)
+    if delta.GetLength() > 1.0e-6:
+        try:
+            ElementTransformUtils.MoveElement(doc, crop_id, delta)
+        except Exception:
+            pass
+    return True
 
 
 def _copy_nonrect_crop(src, dst):
