@@ -142,13 +142,28 @@ class ExtensibleStorageManager(object):
         """
         Return the stored data as a dict, or None if nothing has been saved yet.
         No Transaction is required.
+
+        Reads are LOOKUP-ONLY: if the schema does not already exist (nothing has
+        ever been saved in this model), we do NOT build it. Building a schema
+        just to check for data would register an empty, unused schema — which
+        then shows up under Purge Unused > Extensible Storage Schemas and
+        confuses users. The schema is created only in save(), where it
+        immediately gets an entity and so is never "unused". A model that has
+        real data already carries the schema (persisted with the entity), so
+        Schema.Lookup finds it here without us rebuilding anything.
         """
         try:
-            schema = self._get_schema()
-            el     = self._get_element(doc)
-            if el is None:
-                return None  # no DataStorage element created yet
+            from Autodesk.Revit.DB.ExtensibleStorage import Schema  # noqa: PLC0415
             import System as _Sys  # noqa: PLC0415
+
+            schema = Schema.Lookup(_Sys.Guid(self._guid))
+            if schema is None:
+                return None  # never saved — and we avoided creating the schema
+            self._schema_cache = schema
+
+            el = self._get_element(doc)
+            if el is None:
+                return None  # no storage element yet
             entity = el.GetEntity(schema)
             if not entity.IsValid():
                 return None
