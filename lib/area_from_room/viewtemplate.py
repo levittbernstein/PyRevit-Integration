@@ -207,6 +207,17 @@ def _graphics_source(doc, src):
     return src
 
 
+def _find_template(doc, name):
+    """An existing view template with this exact name, or None."""
+    for v in FilteredElementCollector(doc).OfClass(View):
+        try:
+            if v.IsTemplate and v.Name == name:
+                return v
+        except Exception:
+            continue
+    return None
+
+
 def _template_base_name(doc, src):
     tid = src.ViewTemplateId
     if tid is not None and tid != ElementId.InvalidElementId:
@@ -243,17 +254,32 @@ def apply_look(doc, src, dst, report, suffix='_Area Plan'):
 
     target_name = _template_base_name(doc, src) + suffix
 
-    # Mint a reusable area-plan template from the (now matching) view.
+    # Reuse an existing template of this name rather than making duplicates —
+    # several views that share a source template all map to one output template.
+    existing = _find_template(doc, target_name)
+    if existing is not None:
+        try:
+            dst.ViewTemplateId = existing.Id
+            report.note('Reused view template "{}".'.format(target_name))
+            return
+        except Exception:
+            pass
+
+    # Otherwise mint a reusable template from the (now matching) view.
     # View.CreateViewTemplate() exists in Revit 2020+.
     try:
         checker = getattr(dst, 'IsViewValidForTemplateCreation', None)
         if callable(checker) and not dst.IsViewValidForTemplateCreation():
-            report.warn('Area plan not valid for template creation; look copied '
+            report.warn('View not valid for template creation; look copied '
                         'directly. Save one via "Create Template from Current '
                         'View" named "{}".'.format(target_name))
             return
         tpl = dst.CreateViewTemplate()
-        tpl.Name = _unique_view_name(doc, target_name)
+        # Name it exactly target_name where possible, so the next view reuses it.
+        try:
+            tpl.Name = target_name
+        except Exception:
+            tpl.Name = _unique_view_name(doc, target_name)
         dst.ViewTemplateId = tpl.Id
         # Carry the old template's custom parameters (e.g. "View Type") across —
         # CreateViewTemplate copies graphics but not project-parameter values.
@@ -261,4 +287,4 @@ def apply_look(doc, src, dst, report, suffix='_Area Plan'):
         report.note('Created + applied view template "{}".'.format(tpl.Name))
     except Exception as ex:
         report.warn('View template creation failed ({}); graphic look was still '
-                    'copied directly onto the area plan.'.format(ex))
+                    'copied directly onto the view.'.format(ex))
