@@ -342,7 +342,7 @@ else:
             tg.Assimilate()
 
             # ── Summary ────────────────────────────────────────────────────
-            md = ['# Area Plan From Rooms', '',
+            md = ['# Floor to Area Plan', '',
                   'Converted {} floor plan(s) to area scheme "{}".'
                   .format(len(chosen), scheme.Name), '']
             for rep in reports:

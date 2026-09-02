@@ -143,7 +143,7 @@ else:
                 reports.append(rep)
             tg.Assimilate()
 
-            md = ['# Floor Plan From Area', '',
+            md = ['# Area to Floor Plan', '',
                   'Created {} floor plan(s) matching the chosen area '
                   'plan(s).'.format(len(chosen)), '']
             for rep in reports:

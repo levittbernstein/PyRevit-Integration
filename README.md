@@ -11,7 +11,8 @@ A growing suite of Revit automation tools for Levitt Bernstein, delivered as a s
 | Export Register | Issue Register | Exports a formatted Deliverables List & Issue Sheet (Excel + PDF) |
 | Keynote Manager | Keynotes | Renumber, reorder and categorise keynotes, then sync to the keynote file and all model references |
 | Set In Groups | Parameters | Set a parameter across many elements bucketed by another parameter, including elements inside model groups |
-| Area Plan From Rooms | Areas | Convert a floor plan into an Area Plan that mirrors its rooms — boundaries, parameter data, colour scheme, view template, tags and key schedules |
+| Floor to Area Plan | Drawings | Convert a floor plan into an Area Plan that mirrors its rooms — boundaries, parameter data, colour scheme, view template, tags and key schedules |
+| Area to Floor Plan | Drawings | Convert an area plan into a Floor Plan matching its view, graphics, crop and view template (no boundaries/rooms/colour scheme) |
 
 ---
 
@@ -500,7 +501,7 @@ Autodesk have logged the gap as REVIT-99372.
 
 ---
 
-## Area Plan From Rooms — detail
+## Floor to Area Plan — detail
 
 ### What it does
 
@@ -753,7 +754,7 @@ they will fail silently or with confusing errors under IronPython.
 
 ---
 
-## Developer notes — Revit API gotchas (from Area Plan From Rooms)
+## Developer notes — Revit API gotchas (from the Floor/Area Plan tools)
 
 Hard-won constraints discovered building the Area→Rooms tool. Most are "you
 can't do X the obvious way" limits with a non-obvious workaround.
